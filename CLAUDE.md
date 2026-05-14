@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Current Phase: 1 — Local Agent
+
+We are in Phase 1. See `design/phases.md` for the full phase breakdown.
+
+**In scope:** single-user local agent, Plaid (one account), Python CLI, local JSON memory, Claude API, console output.  
+**Out of scope:** web UI, database, auth, multi-user, AWS, background scheduling.
+
+When helping with code, stay within Phase 1 constraints. Do not add multi-user support, database access, or cloud infrastructure unless explicitly asked.
+
+---
+
 ## Project
 
 **PennyPath** is a personal finance companion — not a budgeting tool. The product philosophy is non-judgmental, low-pressure habit coaching. It helps users build healthy financial discipline progressively and adaptively, like a caring buddy rather than an enforcer.
