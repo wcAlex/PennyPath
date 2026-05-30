@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PennyPath — Dev Chat</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      color: #1a1a2e;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: white;
+      padding: 12px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.3px; }
+    header span { font-size: 11px; color: #8b8fa8; margin-left: 10px; }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .message {
+      max-width: 75%;
+      border-radius: 14px;
+      padding: 11px 15px;
+      line-height: 1.55;
+      font-size: 14px;
+      word-break: break-word;
+    }
+    .user {
+      align-self: flex-end;
+      background: #4f46e5;
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+    .assistant {
+      align-self: flex-start;
+      background: white;
+      color: #1a1a2e;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      border-bottom-left-radius: 4px;
+    }
+
+    /* Rich markdown rendering inside assistant bubbles */
+    .assistant p { margin: 4px 0; }
+    .assistant p:first-child { margin-top: 0; }
+    .assistant p:last-child { margin-bottom: 0; }
+    .assistant strong { font-weight: 600; }
+    .assistant em { font-style: italic; }
+    .assistant ul, .assistant ol { padding-left: 18px; margin: 6px 0; }
+    .assistant li { margin: 2px 0; }
+    .assistant h1, .assistant h2, .assistant h3 {
+      font-size: 14px; font-weight: 700; margin: 10px 0 4px;
+    }
+    .assistant code {
+      background: #f3f4f6;
+      color: #e11d48;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.88em;
+    }
+    .assistant pre {
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 12px 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 8px 0;
+    }
+    .assistant pre code {
+      background: none;
+      color: inherit;
+      padding: 0;
+      font-size: 0.9em;
+    }
+    .assistant table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 8px 0;
+      font-size: 13px;
+    }
+    .assistant th {
+      background: #f8fafc;
+      font-weight: 600;
+      text-align: left;
+      padding: 6px 10px;
+      border: 1px solid #e2e8f0;
+    }
+    .assistant td {
+      padding: 6px 10px;
+      border: 1px solid #e2e8f0;
+    }
+    .assistant tr:nth-child(even) td { background: #f8fafc; }
+    .assistant blockquote {
+      border-left: 3px solid #c7d2fe;
+      padding: 4px 12px;
+      margin: 6px 0;
+      color: #6b7280;
+    }
+    .assistant hr { border: none; border-top: 1px solid #e5e7eb; margin: 8px 0; }
+
+    /* Attachment image inside user bubble */
+    .message img.attachment {
+      display: block;
+      max-width: 220px;
+      max-height: 160px;
+      object-fit: cover;
+      border-radius: 8px;
+      margin-top: 8px;
+    }
+
+    /* Typing indicator */
+    .typing {
+      align-self: flex-start;
+      background: white;
+      border-radius: 14px;
+      border-bottom-left-radius: 4px;
+      padding: 12px 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    .typing span {
+      display: inline-block;
+      width: 7px; height: 7px;
+      background: #9ca3af;
+      border-radius: 50%;
+      margin: 0 2px;
+      animation: bounce 1.1s infinite ease-in-out;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.18s; }
+    .typing span:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes bounce {
+      0%, 60%, 100% { transform: translateY(0); }
+      30% { transform: translateY(-5px); }
+    }
+
+    /* Input area */
+    #input-area {
+      background: white;
+      border-top: 1px solid #e5e7eb;
+      padding: 12px 16px;
+      flex-shrink: 0;
+    }
+    #image-preview {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    #image-preview img {
+      width: 52px; height: 52px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+    #image-preview .remove-btn {
+      background: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 22px; height: 22px;
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #image-preview .file-name {
+      font-size: 12px; color: #6b7280; flex: 1;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    #input-row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .attach-label {
+      cursor: pointer;
+      color: #9ca3af;
+      padding: 8px 6px;
+      border-radius: 6px;
+      font-size: 18px;
+      flex-shrink: 0;
+      transition: color 0.15s;
+    }
+    .attach-label:hover { color: #4f46e5; }
+    #file-input { display: none; }
+
+    #text-input {
+      flex: 1;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 9px 13px;
+      font-size: 14px;
+      font-family: inherit;
+      resize: none;
+      min-height: 40px;
+      max-height: 130px;
+      line-height: 1.45;
+      transition: border-color 0.15s;
+    }
+    #text-input:focus { outline: none; border-color: #4f46e5; }
+    #text-input::placeholder { color: #9ca3af; }
+
+    #send-btn {
+      background: #4f46e5;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 9px 18px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    #send-btn:hover { background: #4338ca; }
+    #send-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+    #clear-btn {
+      background: none;
+      border: 1px solid #374151;
+      color: #9ca3af;
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: color 0.15s;
+    }
+    #clear-btn:hover { color: white; border-color: #6b7280; }
+
+    #model-badge {
+      font-size: 11px;
+      color: #6b7280;
+      background: #1e2235;
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>PennyPath <span>dev chat</span></h1>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <span id="model-badge">loading…</span>
+    <button id="clear-btn" onclick="clearChat()">New Chat</button>
+  </div>
+</header>
+
+<div id="messages">
+  <div class="message assistant">
+    Hey! I'm PennyPath. Ask me anything about your spending, or attach a screenshot —
+    I'll load your transactions from <code>data/statements/</code> automatically.
+    Try: <em>"How am I doing this month?"</em> or <em>"What are my biggest expenses?"</em>
+  </div>
+</div>
+
+<div id="input-area">
+  <div id="image-preview">
+    <img id="preview-img" src="" alt="">
+    <span class="file-name" id="file-name"></span>
+    <button class="remove-btn" onclick="removeImage()">×</button>
+  </div>
+  <div id="input-row">
+    <label class="attach-label" title="Attach image">
+      📎
+      <input id="file-input" type="file" accept="image/*" onchange="handleFileSelect(event)">
+    </label>
+    <textarea
+      id="text-input"
+      placeholder="Ask about your spending… (Enter to send, Shift+Enter for newline)"
+      rows="1"
+      onkeydown="handleKeyDown(event)"
+      oninput="autoResize(this)"
+    ></textarea>
+    <button id="send-btn" onclick="sendMessage()">Send</button>
+  </div>
+</div>
+
+<script>
+  marked.use({ breaks: true, gfm: true });
+
+  let selectedFile = null;
+
+  // Show model name in badge
+  fetch('/model').then(r => r.json()).then(d => {
+    document.getElementById('model-badge').textContent = d.model || 'unknown model';
+  }).catch(() => {
+    document.getElementById('model-badge').textContent = '';
+  });
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 130) + 'px';
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    selectedFile = file;
+    document.getElementById('preview-img').src = URL.createObjectURL(file);
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('image-preview').style.display = 'flex';
+  }
+
+  function removeImage() {
+    selectedFile = null;
+    document.getElementById('file-input').value = '';
+    document.getElementById('image-preview').style.display = 'none';
+    document.getElementById('preview-img').src = '';
+  }
+
+  function scrollToBottom() {
+    const el = document.getElementById('messages');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function addMessage(role, text, imageSrc) {
+    const messages = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'message ' + role;
+
+    if (role === 'assistant') {
+      div.innerHTML = marked.parse(text);
+    } else {
+      const p = document.createElement('p');
+      p.textContent = text || '(image only)';
+      div.appendChild(p);
+      if (imageSrc) {
+        const img = document.createElement('img');
+        img.src = imageSrc;
+        img.className = 'attachment';
+        div.appendChild(img);
+      }
+    }
+
+    messages.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  function addTypingIndicator() {
+    const messages = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'typing';
+    div.id = 'typing-indicator';
+    div.innerHTML = '<span></span><span></span><span></span>';
+    messages.appendChild(div);
+    scrollToBottom();
+  }
+
+  function removeTypingIndicator() {
+    const el = document.getElementById('typing-indicator');
+    if (el) el.remove();
+  }
+
+  async function sendMessage() {
+    const input = document.getElementById('text-input');
+    const text = input.value.trim();
+    if (!text && !selectedFile) return;
+
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = true;
+
+    const imageSrc = selectedFile ? URL.createObjectURL(selectedFile) : null;
+    addMessage('user', text, imageSrc);
+
+    input.value = '';
+    input.style.height = 'auto';
+
+    const formData = new FormData();
+    formData.append('message', text);
+    if (selectedFile) formData.append('image', selectedFile);
+    removeImage();
+
+    addTypingIndicator();
+
+    try {
+      const res = await fetch('/chat', { method: 'POST', body: formData });
+      const data = await res.json();
+      removeTypingIndicator();
+      if (data.error) {
+        addMessage('assistant', `⚠️ ${data.error}`);
+      } else {
+        addMessage('assistant', data.response);
+      }
+    } catch (err) {
+      removeTypingIndicator();
+      addMessage('assistant', 'Connection error. Is the server still running?');
+    }
+
+    sendBtn.disabled = false;
+    input.focus();
+  }
+
+  async function clearChat() {
+    await fetch('/memory', { method: 'DELETE' });
+    const messages = document.getElementById('messages');
+    messages.innerHTML = '';
+    addMessage('assistant', "Fresh start. What's on your mind?");
+  }
+
+  document.getElementById('text-input').focus();
+</script>
+</body>
+</html>

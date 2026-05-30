@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PennyPath — Get Started</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      color: #1a1a2e;
+    }
+
+    .brand {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1a1a2e;
+      letter-spacing: 0.3px;
+      margin-bottom: 20px;
+    }
+    .brand span {
+      color: #4f46e5;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.09);
+      padding: 36px 32px;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    /* Progress dots */
+    .progress {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 28px;
+    }
+    .progress-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e5e7eb;
+      transition: background 0.25s;
+    }
+    .progress-dot.active {
+      background: #4f46e5;
+      width: 24px;
+      border-radius: 4px;
+    }
+    .progress-dot.done {
+      background: #a5b4fc;
+    }
+
+    .step-label {
+      font-size: 12px;
+      color: #9ca3af;
+      text-align: center;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      text-align: center;
+      color: #1a1a2e;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      color: #6b7280;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    /* Text input */
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 15px;
+      font-family: inherit;
+      transition: border-color 0.15s;
+      color: #1a1a2e;
+    }
+    input[type="text"]:focus,
+    input[type="number"]:focus {
+      outline: none;
+      border-color: #4f46e5;
+    }
+    input::placeholder { color: #9ca3af; }
+
+    /* Option cards */
+    .options {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+
+    .option-card {
+      border: 2px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      user-select: none;
+    }
+    .option-card:hover {
+      border-color: #a5b4fc;
+      background: #f5f3ff;
+    }
+    .option-card.selected {
+      border-color: #4f46e5;
+      background: #f5f3ff;
+    }
+    .option-card input[type="radio"] {
+      display: none;
+    }
+    .option-emoji {
+      font-size: 20px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .option-text strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+    .option-text span {
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    .other-input-wrap {
+      margin-top: 8px;
+      display: none;
+    }
+    .other-input-wrap.visible {
+      display: block;
+    }
+    .other-input-wrap input {
+      font-size: 14px;
+      padding: 9px 12px;
+    }
+
+    /* Optional target field */
+    .optional-group {
+      margin-top: 16px;
+    }
+    .optional-group label {
+      display: block;
+      font-size: 13px;
+      color: #6b7280;
+      margin-bottom: 6px;
+    }
+
+    /* Intentions */
+    .intentions-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .intention-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .intention-row input[type="text"] {
+      flex: 1;
+      padding: 9px 12px;
+      font-size: 14px;
+    }
+    .intention-row button {
+      background: none;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      color: #9ca3af;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .intention-row button:hover {
+      color: #ef4444;
+      border-color: #fca5a5;
+    }
+    .add-intention-btn {
+      background: none;
+      border: 1px dashed #d1d5db;
+      border-radius: 10px;
+      color: #6b7280;
+      padding: 9px 14px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      width: 100%;
+      margin-top: 4px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .add-intention-btn:hover {
+      border-color: #4f46e5;
+      color: #4f46e5;
+    }
+
+    /* Statement step */
+    .statements-info {
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .statements-info p {
+      font-size: 14px;
+      color: #374151;
+      line-height: 1.6;
+    }
+    .path-block {
+      background: #1e293b;
+      color: #e2e8f0;
+      font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+      font-size: 13px;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-top: 10px;
+      word-break: break-all;
+    }
+    .file-count {
+      font-size: 13px;
+      color: #6b7280;
+      text-align: center;
+      margin: 12px 0 4px;
+    }
+    .file-count strong {
+      color: #4f46e5;
+    }
+
+    /* Navigation buttons */
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .btn-back {
+      background: none;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      color: #6b7280;
+      padding: 11px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .btn-back:hover {
+      border-color: #9ca3af;
+      color: #374151;
+    }
+    .btn-next {
+      background: #4f46e5;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 11px 22px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+      flex: 1;
+      transition: background 0.15s;
+    }
+    .btn-next:hover { background: #4338ca; }
+    .btn-next:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+    /* Step visibility */
+    .step { display: none; }
+    .step.active { display: block; }
+
+    .error-msg {
+      font-size: 13px;
+      color: #ef4444;
+      margin-top: 8px;
+      display: none;
+    }
+    .error-msg.visible { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="brand">Penny<span>Path</span></div>
+
+<div class="card">
+  <!-- Progress -->
+  <div class="progress">
+    <div class="progress-dot active" id="dot-0"></div>
+    <div class="progress-dot" id="dot-1"></div>
+    <div class="progress-dot" id="dot-2"></div>
+    <div class="progress-dot" id="dot-3"></div>
+  </div>
+
+  <!-- Step 1: Name -->
+  <div class="step active" id="step-0">
+    <div class="step-label">Step 1 of 4</div>
+    <h2>What should I call you?</h2>
+    <p class="subtitle">Just your first name is fine.</p>
+    <input type="text" id="name-input" placeholder="Your name" autocomplete="given-name" />
+    <p class="error-msg" id="name-error">Please enter your name to continue.</p>
+    <div class="btn-row">
+      <button class="btn-next" onclick="goNext(0)">Continue →</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Finance Profile -->
+  <div class="step" id="step-1">
+    <div class="step-label">Step 2 of 4</div>
+    <h2>Which best describes your situation?</h2>
+    <p class="subtitle">Pick the one that feels closest right now.</p>
+    <div class="options" id="profile-options">
+      <label class="option-card" onclick="selectOption('profile', 'early_career', this)">
+        <input type="radio" name="profile" value="early_career">
+        <span class="option-emoji">🌱</span>
+        <span class="option-text">
+          <strong>Early career</strong>
+          <span>Building savings habits from scratch</span>
+        </span>
+      </label>
+      <label class="option-card" onclick="selectOption('profile', 'growing_family', this)">
+        <input type="radio" name="profile" value="growing_family">
+        <span class="option-emoji">👨‍👩‍👧</span>
+        <span class="option-text">
+          <strong>Growing family</strong>
+          <span>Managing bigger, more complex spending</span>
+        </span>
+      </label>
+      <label class="option-card" onclick="selectOption('profile', 'paying_down_debt', this)">
+        <input type="radio" name="profile" value="paying_down_debt">
+        <span class="option-emoji">💳</span>
+        <span class="option-text">
+          <strong>Paying down debt</strong>
+          <span>Focused on reducing what I owe</span>
+        </span>
+      </label>
+      <label class="option-card" onclick="selectOption('profile', 'building_wealth', this)">
+        <input type="radio" name="profile" value="building_wealth">
+        <span class="option-emoji">📈</span>
+        <span class="option-text">
+          <strong>Building wealth</strong>
+          <span>Optimizing and growing surplus</span>
+        </span>
+      </label>
+      <label class="option-card" id="profile-other-card" onclick="selectOption('profile', 'other', this)">
+        <input type="radio" name="profile" value="other">
+        <span class="option-emoji">✏️</span>
+        <span class="option-text">
+          <strong>Other</strong>
+          <span>Tell me in your own words</span>
+        </span>
+      </label>
+    </div>
+    <div class="other-input-wrap" id="profile-other-wrap">
+      <input type="text" id="profile-other-text" placeholder="Describe your situation…" />
+    </div>
+    <p class="error-msg" id="profile-error">Please select an option to continue.</p>
+    <div class="btn-row">
+      <button class="btn-back" onclick="goBack(1)">← Back</button>
+      <button class="btn-next" onclick="goNext(1)">Continue →</button>
+    </div>
+  </div>
+
+  <!-- Step 3: Goal -->
+  <div class="step" id="step-2">
+    <div class="step-label">Step 3 of 4</div>
+    <h2>What would you most like to work on?</h2>
+    <p class="subtitle">We'll keep this front and centre as you build your habit.</p>
+    <div class="options" id="goal-options">
+      <label class="option-card" onclick="selectOption('goal', 'emergency_fund', this)">
+        <input type="radio" name="goal" value="emergency_fund">
+        <span class="option-emoji">🛟</span>
+        <span class="option-text">
+          <strong>Build an emergency fund</strong>
+          <span>A safety net for the unexpected</span>
+        </span>
+      </label>
+      <label class="option-card" onclick="selectOption('goal', 'reduce_spending', this)">
+        <input type="radio" name="goal" value="reduce_spending">
+        <span class="option-emoji">🍽️</span>
+        <span class="option-text">
+          <strong>Spend less on dining / subscriptions</strong>
+          <span>Trim the easy wins first</span>
+        </span>
+      </label>
+      <label class="option-card" onclick="selectOption('goal', 'save_specific', this)">
+        <input type="radio" name="goal" value="save_specific">
+        <span class="option-emoji">🎯</span>
+        <span class="option-text">
+          <strong>Save for something specific</strong>
+          <span>A trip, a purchase, a milestone</span>
+        </span>
+      </label>
+      <label class="option-card" onclick="selectOption('goal', 'get_out_of_debt', this)">
+        <input type="radio" name="goal" value="get_out_of_debt">
+        <span class="option-emoji">💰</span>
+        <span class="option-text">
+          <strong>Get out of debt</strong>
+          <span>Clear the slate and move forward</span>
+        </span>
+      </label>
+      <label class="option-card" id="goal-other-card" onclick="selectOption('goal', 'other', this)">
+        <input type="radio" name="goal" value="other">
+        <span class="option-emoji">✏️</span>
+        <span class="option-text">
+          <strong>Something else</strong>
+          <span>Tell me what matters to you</span>
+        </span>
+      </label>
+    </div>
+    <div class="other-input-wrap" id="goal-other-wrap">
+      <input type="text" id="goal-other-text" placeholder="Describe your goal…" />
+    </div>
+    <div class="optional-group">
+      <label for="monthly-target">Optional: monthly amount you'd like to aim for ($)</label>
+      <input type="number" id="monthly-target" placeholder="e.g. 200" min="0" step="1" />
+    </div>
+    <p class="error-msg" id="goal-error">Please select a goal to continue.</p>
+    <div class="btn-row">
+      <button class="btn-back" onclick="goBack(2)">← Back</button>
+      <button class="btn-next" onclick="goNext(2)">Continue →</button>
+    </div>
+  </div>
+
+  <!-- Step 4: Connect Accounts -->
+  <div class="step" id="step-3">
+    <div class="step-label">Step 4 of 4</div>
+    <h2>Add your bank statements</h2>
+    <p class="subtitle">Drop CSV or PDF exports from your bank into your statements folder.</p>
+
+    <div class="statements-info">
+      <p>Export statements from your bank's website and save them here:</p>
+      <div class="path-block">data/statements/</div>
+      <p style="margin-top:10px;font-size:13px;color:#6b7280;">
+        Supported: CSV, PDF &nbsp;·&nbsp; Any number of files
+      </p>
+    </div>
+
+    <p class="file-count" id="file-count">Checking…</p>
+
+    <p class="error-msg" id="submit-error">Something went wrong. Please try again.</p>
+
+    <div class="btn-row">
+      <button class="btn-back" onclick="goBack(3)">← Back</button>
+      <button class="btn-next" id="submit-btn" onclick="submitOnboarding()">I've added my statements</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Form state
+  const state = {
+    name: '',
+    finance_profile: '',
+    custom_profile: '',
+    goal_type: '',
+    goal_label: '',
+    goal_monthly_target: null,
+    intentions: [],
+  };
+
+  const GOAL_LABELS = {
+    emergency_fund: 'Build an emergency fund',
+    reduce_spending: 'Spend less on dining / subscriptions',
+    save_specific: 'Save for something specific',
+    get_out_of_debt: 'Get out of debt',
+    other: '',
+  };
+
+  const PROFILE_LABELS = {
+    early_career: 'Early career',
+    growing_family: 'Growing family',
+    paying_down_debt: 'Paying down debt',
+    building_wealth: 'Building wealth',
+    other: '',
+  };
+
+  let currentStep = 0;
+
+  function updateProgress(step) {
+    for (let i = 0; i < 4; i++) {
+      const dot = document.getElementById('dot-' + i);
+      dot.className = 'progress-dot';
+      if (i < step) dot.classList.add('done');
+      else if (i === step) dot.classList.add('active');
+    }
+  }
+
+  function showStep(n) {
+    document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+    document.getElementById('step-' + n).classList.add('active');
+    updateProgress(n);
+    currentStep = n;
+  }
+
+  function selectOption(group, value, cardEl) {
+    // Deselect all in group
+    document.querySelectorAll(`#${group}-options .option-card`).forEach(c => c.classList.remove('selected'));
+    cardEl.classList.add('selected');
+
+    // Show/hide "other" text input
+    const otherWrap = document.getElementById(group + '-other-wrap');
+    if (value === 'other') {
+      otherWrap.classList.add('visible');
+    } else {
+      otherWrap.classList.remove('visible');
+    }
+
+    // Store in state
+    if (group === 'profile') {
+      state.finance_profile = value;
+    } else if (group === 'goal') {
+      state.goal_type = value;
+      state.goal_label = GOAL_LABELS[value] || '';
+    }
+  }
+
+  function goNext(step) {
+    // Validate
+    if (step === 0) {
+      const name = document.getElementById('name-input').value.trim();
+      if (!name) {
+        document.getElementById('name-error').classList.add('visible');
+        return;
+      }
+      document.getElementById('name-error').classList.remove('visible');
+      state.name = name;
+      showStep(1);
+      return;
+    }
+
+    if (step === 1) {
+      if (!state.finance_profile) {
+        document.getElementById('profile-error').classList.add('visible');
+        return;
+      }
+      document.getElementById('profile-error').classList.remove('visible');
+      if (state.finance_profile === 'other') {
+        state.custom_profile = document.getElementById('profile-other-text').value.trim();
+      }
+      showStep(2);
+      return;
+    }
+
+    if (step === 2) {
+      if (!state.goal_type) {
+        document.getElementById('goal-error').classList.add('visible');
+        return;
+      }
+      document.getElementById('goal-error').classList.remove('visible');
+      if (state.goal_type === 'other') {
+        const customGoal = document.getElementById('goal-other-text').value.trim();
+        state.goal_label = customGoal;
+      }
+      const targetVal = document.getElementById('monthly-target').value;
+      state.goal_monthly_target = targetVal ? parseFloat(targetVal) : null;
+      showStep(3);
+      loadStatementCount();
+      return;
+    }
+  }
+
+  function goBack(step) {
+    showStep(step - 1);
+  }
+
+  async function loadStatementCount() {
+    const el = document.getElementById('file-count');
+    try {
+      const res = await fetch('/dashboard/data');
+      const data = await res.json();
+      const n = data.statement_count || 0;
+      if (n === 0) {
+        el.innerHTML = 'No files found yet — add them to <code>data/statements/</code> and come back.';
+      } else {
+        el.innerHTML = '<strong>' + n + '</strong> statement file' + (n === 1 ? '' : 's') + ' found.';
+      }
+    } catch (e) {
+      el.textContent = 'Could not check file count.';
+    }
+  }
+
+  async function submitOnboarding() {
+    const btn = document.getElementById('submit-btn');
+    const errEl = document.getElementById('submit-error');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    errEl.classList.remove('visible');
+
+    const payload = {
+      name: state.name,
+      finance_profile: state.finance_profile,
+      custom_profile: state.custom_profile,
+      goal_type: state.goal_type,
+      goal_label: state.goal_label,
+      goal_monthly_target: state.goal_monthly_target,
+      intentions: state.intentions,
+    };
+
+    try {
+      const res = await fetch('/onboard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        window.location.href = '/dashboard';
+      } else {
+        throw new Error('Server returned not ok');
+      }
+    } catch (e) {
+      errEl.classList.add('visible');
+      btn.disabled = false;
+      btn.textContent = "I've added my statements";
+    }
+  }
+
+  // Allow pressing Enter on name input to advance
+  document.getElementById('name-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') goNext(0);
+  });
+</script>
+</body>
+</html>

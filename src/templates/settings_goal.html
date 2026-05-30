@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PennyPath — Goal</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: white;
+      padding: 0 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 52px;
+      flex-shrink: 0;
+    }
+    .logo {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      color: white;
+      text-decoration: none;
+    }
+    .header-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: white;
+      letter-spacing: 0.3px;
+    }
+    .back-link {
+      color: #cbd5e1;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .back-link:hover { color: white; }
+
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 32px 20px 64px;
+    }
+
+    .breadcrumbs {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 8px;
+    }
+    .breadcrumbs a { color: #4f46e5; text-decoration: none; }
+    .breadcrumbs a:hover { text-decoration: underline; }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      color: #6b7280;
+      font-size: 14px;
+      margin-bottom: 28px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: #1a1a2e;
+    }
+    .section-desc {
+      font-size: 13px;
+      color: #6b7280;
+      margin-bottom: 16px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .chip {
+      background: white;
+      border: 1.5px solid #d1d5db;
+      color: #374151;
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .chip:hover {
+      border-color: #4f46e5;
+      color: #4f46e5;
+    }
+    .chip.selected {
+      background: #eef2ff;
+      border-color: #4f46e5;
+      color: #4f46e5;
+    }
+
+    .field {
+      margin-bottom: 16px;
+    }
+    .field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: #6b7280;
+      margin-bottom: 6px;
+    }
+    .field textarea {
+      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-family: inherit;
+      resize: vertical;
+      min-height: 80px;
+      line-height: 1.5;
+      transition: border-color 0.15s;
+    }
+    .field textarea:focus { outline: none; border-color: #4f46e5; }
+
+    .action-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 6px;
+    }
+
+    .primary-btn {
+      background: #4f46e5;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .primary-btn:hover { background: #4338ca; }
+    .primary-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+    .secondary-btn {
+      background: white;
+      color: #4f46e5;
+      border: 1px solid #4f46e5;
+      border-radius: 10px;
+      padding: 9px 18px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .secondary-btn:hover { background: #eef2ff; }
+    .secondary-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+
+    .save-flash {
+      color: #16a34a;
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .save-flash.show { opacity: 1; }
+
+    /* Budget guidance section */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .section-header .section-title { margin-bottom: 0; }
+
+    .budget-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .budget-card {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .budget-card .cat-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1a1a2e;
+      margin-bottom: 6px;
+      text-transform: capitalize;
+    }
+    .budget-card .hint-text {
+      width: 100%;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #374151;
+      font-size: 13px;
+      font-family: inherit;
+      line-height: 1.5;
+      padding: 6px 8px;
+      border-radius: 6px;
+      resize: vertical;
+      min-height: 60px;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .budget-card .hint-text:hover {
+      background: white;
+      border-color: #e5e7eb;
+    }
+    .budget-card .hint-text:focus {
+      outline: none;
+      background: white;
+      border-color: #4f46e5;
+    }
+    .budget-card .save-hint {
+      font-size: 11px;
+      color: #16a34a;
+      margin-top: 4px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .budget-card .save-hint.show { opacity: 1; }
+
+    .empty-budget {
+      padding: 20px;
+      color: #6b7280;
+      font-size: 13px;
+      text-align: center;
+      background: #f9fafb;
+      border-radius: 8px;
+      border: 1px dashed #d1d5db;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="/dashboard">PennyPath</a>
+  <span class="header-title">Goal</span>
+  <a class="back-link" href="/settings">← Settings</a>
+</header>
+
+<main>
+  <div class="breadcrumbs">
+    <a href="/settings">Settings</a> › Goal
+  </div>
+  <h1>Goal</h1>
+  <p class="subtitle">A single sentence about what matters to you right now. It anchors the
+    companion's insights — privately, never as a scoreboard.</p>
+
+  <!-- ── Section 1: Goal ── -->
+  <div class="card">
+    <div class="section-title">What matters to you right now?</div>
+    <p class="section-desc">Pick one, or use your own words.</p>
+
+    <div class="chip-row" id="goal-chips">
+      {% set current_key = user.goal_key if user and user.goal_key else "" %}
+      <button class="chip {% if current_key == 'stay_ahead_bills' %}selected{% endif %}"
+              type="button" data-key="stay_ahead_bills"
+              onclick="selectChip(this)">Stay ahead of my bills</button>
+      <button class="chip {% if current_key == 'pay_off_credit' %}selected{% endif %}"
+              type="button" data-key="pay_off_credit"
+              onclick="selectChip(this)">Pay off my credit</button>
+      <button class="chip {% if current_key == 'build_credit' %}selected{% endif %}"
+              type="button" data-key="build_credit"
+              onclick="selectChip(this)">Build good credit</button>
+      <button class="chip {% if current_key == 'custom' %}selected{% endif %}"
+              type="button" data-key="custom"
+              onclick="selectChip(this)">Custom…</button>
+    </div>
+
+    <div class="field">
+      <label for="goal-text">Your words:</label>
+      <textarea id="goal-text" placeholder="Tell me in your own words what you want to focus on.">{{ user.goal_text if user and user.goal_text else "" }}</textarea>
+    </div>
+
+    <input type="hidden" id="goal-key" value="{{ current_key }}">
+
+    <div class="action-row">
+      <button class="primary-btn" type="button" id="save-goal-btn" onclick="saveGoal()">Save goal</button>
+      <span class="save-flash" id="goal-save-flash">Saved ✓</span>
+    </div>
+  </div>
+
+  <!-- ── Section 2: Budget guidance ── -->
+  <div class="card">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Budget guidance</div>
+        <p class="section-desc">Auto-generated from your goal and recent spending. Tweak any card — you're the boss.</p>
+      </div>
+      <button class="secondary-btn" type="button" id="refresh-budget-btn" onclick="refreshBudget()">Refresh ↻</button>
+    </div>
+
+    <div id="budget-grid" class="budget-grid">
+      {% if user and user.derived_budget and user.derived_budget|length > 0 %}
+        {% for hint in user.derived_budget %}
+        <div class="budget-card" data-category="{{ hint.category }}">
+          <div class="cat-name">{{ hint.category }}</div>
+          <textarea class="hint-text" oninput="markHintDirty(this)"
+                    onblur="saveHint(this)">{{ hint.hint_text }}</textarea>
+          <div class="save-hint">Saved ✓</div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty-budget" style="grid-column: 1 / -1;">
+          No guidance yet. Click <strong>Refresh ↻</strong> to generate some from your recent spending.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</main>
+
+<script>
+  // ── Goal chip & save ────────────────────────────────────
+
+  function selectChip(el) {
+    document.querySelectorAll('#goal-chips .chip').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    document.getElementById('goal-key').value = el.dataset.key;
+    if (el.dataset.key === 'custom') {
+      document.getElementById('goal-text').focus();
+    }
+  }
+
+  async function saveGoal() {
+    const btn = document.getElementById('save-goal-btn');
+    const flash = document.getElementById('goal-save-flash');
+    const goalKey = document.getElementById('goal-key').value || '';
+    const goalText = document.getElementById('goal-text').value || '';
+
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+
+    try {
+      const formData = new FormData();
+      formData.append('goal_key', goalKey);
+      formData.append('goal_text', goalText);
+      const res = await fetch('/settings/goal', { method: 'POST', body: formData });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      flash.classList.add('show');
+      setTimeout(() => flash.classList.remove('show'), 1800);
+    } catch (err) {
+      alert('Could not save: ' + err.message);
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Save goal';
+  }
+
+  // ── Budget guidance ─────────────────────────────────────
+
+  function markHintDirty(el) {
+    const card = el.closest('.budget-card');
+    if (card) card.querySelector('.save-hint').classList.remove('show');
+  }
+
+  async function saveHint(el) {
+    const card = el.closest('.budget-card');
+    if (!card) return;
+    const category = card.dataset.category;
+    const hintText = el.value;
+    try {
+      const formData = new FormData();
+      formData.append('category', category);
+      formData.append('hint_text', hintText);
+      // Endpoint is implementation-defined on backend; best-effort inline save.
+      const res = await fetch('/settings/goal/budget/edit', { method: 'POST', body: formData });
+      if (res.ok) {
+        card.querySelector('.save-hint').classList.add('show');
+        setTimeout(() => card.querySelector('.save-hint').classList.remove('show'), 1500);
+      }
+    } catch (err) {
+      // Silently fail — backend may not yet implement inline edit in 1B.
+    }
+  }
+
+  async function refreshBudget() {
+    const btn = document.getElementById('refresh-budget-btn');
+    const grid = document.getElementById('budget-grid');
+    btn.disabled = true;
+    btn.textContent = 'Refreshing…';
+
+    try {
+      const res = await fetch('/settings/goal/budget/refresh', { method: 'POST' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      renderBudget(data.derived_budget || []);
+    } catch (err) {
+      alert('Could not refresh: ' + err.message);
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Refresh ↻';
+  }
+
+  function renderBudget(hints) {
+    const grid = document.getElementById('budget-grid');
+    if (!hints || hints.length === 0) {
+      grid.innerHTML = `<div class="empty-budget" style="grid-column: 1 / -1;">
+        No guidance yet. Click <strong>Refresh ↻</strong> to generate some from your recent spending.
+      </div>`;
+      return;
+    }
+    grid.innerHTML = hints.map(h => `
+      <div class="budget-card" data-category="${escapeHtml(h.category)}">
+        <div class="cat-name">${escapeHtml(h.category)}</div>
+        <textarea class="hint-text"
+                  oninput="markHintDirty(this)"
+                  onblur="saveHint(this)">${escapeHtml(h.hint_text || '')}</textarea>
+        <div class="save-hint">Saved ✓</div>
+      </div>
+    `).join('');
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+</script>
+
+</body>
+</html>

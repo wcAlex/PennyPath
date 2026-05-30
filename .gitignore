@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.envrc
 
 # Claude Code
 .claude/settings.local.json
@@ -43,6 +44,11 @@ out/
 *.tfstate.backup
 terraform.tfvars
 cdk.out/
+
+# Local financial data (never commit)
+data/statements/
+data/user_prefs.json
+data/conversation.json
 
 # Secrets (extra safety net)
 *.pem

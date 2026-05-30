@@ -1,0 +1,9 @@
+openai
+plaid-python
+pymupdf4llm
+pdfplumber
+python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart
+jinja2

@@ -1,0 +1,1581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PennyPath — Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #1a1a2e;
+      color: white;
+      padding: 0 20px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      height: 52px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header .header-left { display: flex; align-items: center; }
+    header .header-center {
+      font-size: 14px;
+      font-weight: 500;
+      color: white;
+      letter-spacing: 0.3px;
+    }
+    header .header-right {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .logo {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      color: white;
+      text-decoration: none;
+    }
+
+    /* ── Tab bar ── */
+    .tab-bar {
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 0 24px;
+      display: flex;
+      gap: 0;
+      position: sticky;
+      top: 52px;
+      z-index: 80;
+    }
+    .tab {
+      background: transparent;
+      border: none;
+      color: #6b7280;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 14px 18px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab:hover { color: #1a1a2e; }
+    .tab.active {
+      color: #4f46e5;
+      border-bottom-color: #4f46e5;
+    }
+
+    /* ── Period selector row ── */
+    .period-row {
+      padding: 18px 24px 6px;
+      font-size: 16px;
+      color: #1a1a2e;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      align-items: center;
+    }
+    .period-row .static { color: #1a1a2e; font-weight: 600; }
+    .period-row select {
+      background: white;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 6px 28px 6px 10px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #4f46e5;
+      font-weight: 600;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3 4.5l3 3 3-3' stroke='%234f46e5' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      background-size: 12px;
+      transition: border-color 0.15s, background-color 0.15s;
+    }
+    .period-row select:hover {
+      border-color: #4f46e5;
+      background-color: #eef2ff;
+    }
+    .period-row .date-range-pickers {
+      display: none;
+      gap: 6px;
+      align-items: center;
+    }
+    .period-row .date-range-pickers.show { display: inline-flex; }
+    .period-row .date-range-pickers input[type="date"] {
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #1a1a2e;
+    }
+
+    /* ── Main / panels ── */
+    main {
+      padding: 8px 24px 48px;
+      transition: padding-right 0.2s;
+    }
+    body.drawer-open main { padding-right: 404px; }
+
+    @media (max-width: 768px) {
+      body.drawer-open main { padding-right: 24px; }
+    }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── Cards ── */
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 20px;
+    }
+
+    .row-two {
+      display: grid;
+      grid-template-columns: 3fr 2fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 900px) {
+      .row-two { grid-template-columns: 1fr; }
+    }
+    body.drawer-open .row-two { grid-template-columns: 1fr; }
+
+    .chart-card {
+      position: relative;
+    }
+    .chart-card .chart-container {
+      position: relative;
+      height: 280px;
+    }
+    .chart-card .center-label {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      text-align: center;
+    }
+    .chart-card .center-label .total {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a2e;
+    }
+    .chart-card .center-label .label {
+      font-size: 11px;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      margin-top: 2px;
+    }
+
+    /* ── Insight card ── */
+    .insight-card {
+      background: #fafbff;
+      border: 1px solid #eef2ff;
+      border-radius: 12px;
+      padding: 18px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .insight-card .insight-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .insight-card .insight-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #4f46e5;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+    .insight-card .refresh-btn {
+      background: transparent;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 4px 9px;
+      font-size: 11px;
+      color: #6b7280;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .insight-card .refresh-btn:hover {
+      color: #4f46e5;
+      border-color: #4f46e5;
+    }
+    .insight-card .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .insight-card .annotation-text {
+      font-size: 14px;
+      line-height: 1.55;
+      color: #1a1a2e;
+    }
+    .insight-card .suggestions-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .insight-card .suggestions {
+      font-size: 13px;
+      line-height: 1.55;
+      color: #374151;
+      padding-left: 16px;
+    }
+    .insight-card .suggestions li { margin: 4px 0; }
+
+    .insight-card.slim {
+      padding: 12px 18px;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .insight-card.slim .insight-body { flex: 1; }
+    .insight-card.slim .suggestions { padding-left: 14px; margin: 4px 0; }
+
+    /* ── Category breakdown list ── */
+    .breakdown-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .breakdown-table th {
+      text-align: left;
+      padding: 10px 12px;
+      color: #6b7280;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      font-size: 11px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .breakdown-table th.num { text-align: right; }
+    .breakdown-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f3f4f6;
+      color: #374151;
+    }
+    .breakdown-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .breakdown-table td.cat { text-transform: capitalize; font-weight: 500; color: #1a1a2e; }
+    .breakdown-table td .muted-avg { color: #6b7280; font-size: 12px; }
+    .breakdown-table tr:last-child td { border-bottom: none; }
+
+    /* ── Transactions table ── */
+    .filter-bar {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      align-items: center;
+    }
+    .filter-bar label {
+      font-size: 12px;
+      color: #6b7280;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .filter-bar input,
+    .filter-bar select {
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #1a1a2e;
+    }
+    .filter-bar input[type="number"] { width: 90px; }
+    .filter-bar input[type="search"] { width: 180px; }
+    .filter-bar input:focus,
+    .filter-bar select:focus { outline: none; border-color: #4f46e5; }
+    .filter-bar .apply-btn {
+      background: #4f46e5;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 7px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .filter-bar .apply-btn:hover { background: #4338ca; }
+
+    .tx-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .tx-table th {
+      text-align: left;
+      padding: 10px 12px;
+      color: #6b7280;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      font-size: 11px;
+      border-bottom: 1px solid #e5e7eb;
+      background: #fafbff;
+    }
+    .tx-table th.num { text-align: right; }
+    .tx-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .tx-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .tx-table td.amt-neg { color: #374151; font-weight: 500; }
+    .tx-table td.amt-pos { color: #16a34a; font-weight: 500; }
+    .tx-table tr.transfer-row td { color: #9ca3af; font-style: italic; }
+    .tx-table .transfer-tag {
+      display: inline-block;
+      font-size: 10px;
+      color: #6b7280;
+      background: #f3f4f6;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-left: 6px;
+      letter-spacing: 0.2px;
+      font-style: normal;
+    }
+    .tx-table td.merchant { color: #1a1a2e; font-weight: 500; }
+    .tx-table td.category { color: #6b7280; text-transform: capitalize; font-size: 12px; }
+    .tx-table td.account { color: #6b7280; font-size: 12px; }
+
+    .pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 12px 4px;
+      font-size: 13px;
+      color: #6b7280;
+    }
+    .pagination .page-btns { display: flex; gap: 6px; }
+    .pagination button {
+      background: white;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: #1a1a2e;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .pagination button:hover:not(:disabled) {
+      background: #eef2ff;
+      border-color: #4f46e5;
+    }
+    .pagination button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Cash flow summary ── */
+    .summary-row {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 16px 20px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #374151;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+    }
+    .summary-row .label { color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .summary-row .num { font-weight: 700; color: #1a1a2e; font-variant-numeric: tabular-nums; }
+    .summary-row .num.shortfall { color: #ef4444; }
+    .summary-row .num.positive { color: #16a34a; }
+
+    /* ── Fixed/Flexible table ── */
+    .ff-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .ff-table th {
+      text-align: right;
+      padding: 8px 10px;
+      color: #6b7280;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      font-size: 10px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .ff-table th:first-child { text-align: left; }
+    .ff-table td {
+      padding: 8px 10px;
+      text-align: right;
+      border-bottom: 1px solid #f3f4f6;
+      font-variant-numeric: tabular-nums;
+      color: #374151;
+    }
+    .ff-table td:first-child { text-align: left; color: #1a1a2e; text-transform: capitalize; }
+    .ff-table .group-header td {
+      background: #fafbff;
+      font-weight: 700;
+      color: #4f46e5;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      text-align: left;
+    }
+    .ff-table .avg-col, .ff-table .total-col {
+      background: #fafbff;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    /* ── Empty / loading ── */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+    .empty-state code {
+      background: #f3f4f6;
+      color: #e11d48;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: 'SF Mono', monospace;
+      font-size: 0.9em;
+    }
+
+    .skeleton {
+      background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+      border-radius: 6px;
+      height: 12px;
+      margin: 6px 0;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    .pinned-empty {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 60px 24px;
+      text-align: center;
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .pinned-empty .icon {
+      font-size: 32px;
+      margin-bottom: 12px;
+      opacity: 0.6;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <a class="logo" href="/dashboard">PennyPath</a>
+  </div>
+  <div class="header-center">Dashboard</div>
+  <div class="header-right">
+    {% include "_user_menu.html" %}
+  </div>
+</header>
+
+<!-- ── Tab bar ── -->
+<div class="tab-bar" role="tablist">
+  <button class="tab" data-tab="spending" onclick="switchTab('spending')">Spending</button>
+  <button class="tab" data-tab="income" onclick="switchTab('income')">Income</button>
+  <button class="tab" data-tab="transactions" onclick="switchTab('transactions')">Transactions</button>
+  <button class="tab" data-tab="cashflow" onclick="switchTab('cashflow')">Cash Flow</button>
+  <button class="tab" data-tab="pinned" onclick="switchTab('pinned')">Pinned</button>
+</div>
+
+<!-- ── Period selector row ── -->
+<div class="period-row" id="period-row"></div>
+
+<main>
+
+  <!-- ─────────────────── Spending panel ─────────────────── -->
+  <section class="panel" id="panel-spending" role="tabpanel">
+    <div class="row-two">
+      <div class="card chart-card">
+        <div class="chart-container">
+          <canvas id="spending-donut"></canvas>
+          <div class="center-label">
+            <div class="total" id="spending-total">$—</div>
+            <div class="label">Total Spend</div>
+          </div>
+        </div>
+      </div>
+      <div class="insight-card" id="spending-insight">
+        <div class="insight-header">
+          <span class="insight-title">Insight ✦</span>
+          <button class="refresh-btn" type="button" onclick="refreshInsight('spending')">Refresh insights ↻</button>
+        </div>
+        <div class="annotation-text" id="spending-annotation">
+          <div class="skeleton" style="width:90%"></div>
+          <div class="skeleton" style="width:75%"></div>
+        </div>
+        <div id="spending-suggestions-wrapper" style="display:none">
+          <div class="suggestions-title">Try this</div>
+          <ul class="suggestions" id="spending-suggestions"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <table class="breakdown-table" id="spending-breakdown-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th class="num">Spent</th>
+            <th class="num">Your avg/mo</th>
+          </tr>
+        </thead>
+        <tbody id="spending-breakdown-body">
+          <tr><td colspan="3" class="empty-state">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ─────────────────── Income panel ─────────────────── -->
+  <section class="panel" id="panel-income" role="tabpanel">
+    <div class="row-two">
+      <div class="card chart-card">
+        <div class="chart-container">
+          <canvas id="income-donut"></canvas>
+          <div class="center-label">
+            <div class="total" id="income-total">$—</div>
+            <div class="label">Total Income</div>
+          </div>
+        </div>
+      </div>
+      <div class="insight-card" id="income-insight">
+        <div class="insight-header">
+          <span class="insight-title">Insight ✦</span>
+          <button class="refresh-btn" type="button" onclick="refreshInsight('income')">Refresh insights ↻</button>
+        </div>
+        <div class="annotation-text" id="income-annotation">
+          <div class="skeleton" style="width:90%"></div>
+          <div class="skeleton" style="width:75%"></div>
+        </div>
+        <div id="income-suggestions-wrapper" style="display:none">
+          <div class="suggestions-title">Try this</div>
+          <ul class="suggestions" id="income-suggestions"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;color:#6b7280;margin-bottom:10px">
+        Income history — last 12 months
+      </div>
+      <div class="chart-container" style="height:220px">
+        <canvas id="income-history"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────── Transactions panel ─────────────────── -->
+  <section class="panel" id="panel-transactions" role="tabpanel">
+    <div class="filter-bar">
+      <label>From <input type="date" id="tx-filter-start"></label>
+      <label>To <input type="date" id="tx-filter-end"></label>
+      <label>Category
+        <select id="tx-filter-category">
+          <option value="">All</option>
+        </select>
+      </label>
+      <label>Account
+        <select id="tx-filter-account">
+          <option value="">All</option>
+        </select>
+      </label>
+      <label>Min $ <input type="number" id="tx-filter-min" step="0.01"></label>
+      <label>Max $ <input type="number" id="tx-filter-max" step="0.01"></label>
+      <label>Search <input type="search" id="tx-filter-q" placeholder="merchant…"></label>
+      <button class="apply-btn" type="button" onclick="applyTxFilters()">Apply</button>
+    </div>
+
+    <div class="insight-card slim" id="transactions-insight">
+      <div class="insight-body">
+        <div class="insight-header">
+          <span class="insight-title">Worth a look</span>
+          <button class="refresh-btn" type="button" onclick="refreshInsight('transactions')">Refresh ↻</button>
+        </div>
+        <div class="annotation-text" id="transactions-annotation">
+          <div class="skeleton" style="width:80%"></div>
+        </div>
+        <ul class="suggestions" id="transactions-suggestions" style="display:none"></ul>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <table class="tx-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Merchant</th>
+            <th>Account</th>
+            <th>Category</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody id="tx-table-body">
+          <tr><td colspan="5" class="empty-state">Loading…</td></tr>
+        </tbody>
+      </table>
+      <div class="pagination">
+        <div id="tx-page-info">—</div>
+        <div class="page-btns">
+          <button type="button" id="tx-prev-btn" onclick="changePage(-1)">‹ Prev</button>
+          <button type="button" id="tx-next-btn" onclick="changePage(1)">Next ›</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────── Cash Flow panel ─────────────────── -->
+  <section class="panel" id="panel-cashflow" role="tabpanel">
+    <div class="card">
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;color:#6b7280;margin-bottom:10px">
+        Income vs. Spending — last 12 months
+      </div>
+      <div class="chart-container" style="height:280px">
+        <canvas id="cashflow-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="summary-row" id="cashflow-summary">
+      <span><span class="label">Loading…</span></span>
+    </div>
+
+    <div class="insight-card" id="cashflow-insight">
+      <div class="insight-header">
+        <span class="insight-title">Insight ✦</span>
+        <button class="refresh-btn" type="button" onclick="refreshInsight('cashflow')">Refresh insights ↻</button>
+      </div>
+      <div class="annotation-text" id="cashflow-annotation">
+        <div class="skeleton" style="width:90%"></div>
+        <div class="skeleton" style="width:75%"></div>
+      </div>
+      <div id="cashflow-suggestions-wrapper" style="display:none">
+        <div class="suggestions-title">Try this</div>
+        <ul class="suggestions" id="cashflow-suggestions"></ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;padding:0;overflow-x:auto">
+      <table class="ff-table" id="ff-table">
+        <thead id="ff-thead"></thead>
+        <tbody id="ff-tbody">
+          <tr><td colspan="2" class="empty-state">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ─────────────────── Pinned panel ─────────────────── -->
+  <section class="panel" id="panel-pinned" role="tabpanel">
+    <div class="pinned-empty">
+      <div class="icon">📌</div>
+      <p>Pinned charts appear here once you ask the companion to save one — <em>coming soon.</em></p>
+    </div>
+  </section>
+
+</main>
+
+{% include "_chat_drawer.html" %}
+
+<script>
+  marked.use({ breaks: true, gfm: true });
+
+  // ── App state ──────────────────────────────────────────
+  const APP_STATE = {
+    tab: 'spending',
+    period: null,          // 'YYYY-MM' | 'ytd' | 'last-12mo' | null
+    start: null,           // for custom range
+    end: null,
+    account: '',
+    category: '',
+    txPage: 1,
+    txMin: null,
+    txMax: null,
+    txQuery: '',
+    insightCache: { spending: null, income: null, transactions: null, cashflow: null },
+  };
+
+  let charts = {
+    spendingDonut: null,
+    incomeDonut: null,
+    incomeHistory: null,
+    cashflow: null,
+  };
+
+  // ── URL state ──────────────────────────────────────────
+
+  function parseQueryString() {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab') || 'spending';
+    APP_STATE.tab = ['spending','income','transactions','cashflow','pinned'].includes(tab) ? tab : 'spending';
+
+    APP_STATE.period = params.get('period') || defaultPeriodFor(APP_STATE.tab);
+    APP_STATE.start = params.get('start');
+    APP_STATE.end = params.get('end');
+    APP_STATE.account = params.get('account') || '';
+    APP_STATE.category = params.get('category') || '';
+    APP_STATE.txPage = parseInt(params.get('page') || '1', 10) || 1;
+    APP_STATE.txMin = params.get('min') || '';
+    APP_STATE.txMax = params.get('max') || '';
+    APP_STATE.txQuery = params.get('q') || '';
+  }
+
+  function writeQueryString() {
+    const params = new URLSearchParams();
+    params.set('tab', APP_STATE.tab);
+    if (APP_STATE.period) params.set('period', APP_STATE.period);
+    if (APP_STATE.start) params.set('start', APP_STATE.start);
+    if (APP_STATE.end) params.set('end', APP_STATE.end);
+    if (APP_STATE.account) params.set('account', APP_STATE.account);
+    if (APP_STATE.category) params.set('category', APP_STATE.category);
+    if (APP_STATE.tab === 'transactions') {
+      if (APP_STATE.txPage > 1) params.set('page', String(APP_STATE.txPage));
+      if (APP_STATE.txMin) params.set('min', APP_STATE.txMin);
+      if (APP_STATE.txMax) params.set('max', APP_STATE.txMax);
+      if (APP_STATE.txQuery) params.set('q', APP_STATE.txQuery);
+    }
+    const qs = params.toString();
+    const url = window.location.pathname + (qs ? '?' + qs : '');
+    history.replaceState({}, '', url);
+  }
+
+  function defaultPeriodFor(tab) {
+    if (tab === 'cashflow') return 'last-12mo';
+    // Default to current month based on today.
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    return `${yyyy}-${mm}`;
+  }
+
+  // ── Period selector ────────────────────────────────────
+
+  function buildPeriodSelector() {
+    const row = document.getElementById('period-row');
+    const verb = {
+      spending: 'Spending',
+      income: 'Income',
+      transactions: 'Transactions',
+      cashflow: 'Cash flow',
+      pinned: 'Pinned charts'
+    }[APP_STATE.tab] || 'View';
+
+    if (APP_STATE.tab === 'pinned') {
+      row.innerHTML = `<span class="static">${verb}</span>`;
+      return;
+    }
+
+    // Build last 24 months
+    const opts = [];
+    const now = new Date();
+    for (let i = 0; i < 24; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const key = `${yyyy}-${mm}`;
+      const label = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      opts.push({ key, label });
+    }
+    opts.push({ key: 'ytd', label: 'Year to date' });
+    opts.push({ key: 'last-12mo', label: 'Last 12 months' });
+    opts.push({ key: 'custom', label: 'Custom range…' });
+
+    const currentPeriod = (APP_STATE.start && APP_STATE.end) ? 'custom' : (APP_STATE.period || defaultPeriodFor(APP_STATE.tab));
+
+    const selectOptions = opts.map(o =>
+      `<option value="${o.key}" ${o.key === currentPeriod ? 'selected' : ''}>${o.label}</option>`
+    ).join('');
+
+    row.innerHTML = `
+      <span class="static">${verb} for</span>
+      <select id="period-category">
+        <option value="" ${!APP_STATE.category ? 'selected' : ''}>All Categories</option>
+      </select>
+      <span class="static">in</span>
+      <select id="period-select">${selectOptions}</select>
+      <span class="date-range-pickers ${currentPeriod === 'custom' ? 'show' : ''}" id="custom-range">
+        <input type="date" id="custom-start" value="${APP_STATE.start || ''}">
+        <span style="color:#6b7280">→</span>
+        <input type="date" id="custom-end" value="${APP_STATE.end || ''}">
+        <button class="apply-btn" type="button" style="background:#4f46e5;color:white;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer" onclick="applyCustomRange()">Go</button>
+      </span>
+      <span class="static">in</span>
+      <select id="period-account">
+        <option value="" ${!APP_STATE.account ? 'selected' : ''}>All Accounts</option>
+      </select>
+    `;
+
+    document.getElementById('period-select').addEventListener('change', onPeriodChange);
+    document.getElementById('period-account').addEventListener('change', onAccountChange);
+    document.getElementById('period-category').addEventListener('change', onCategoryChange);
+  }
+
+  function onPeriodChange(e) {
+    const val = e.target.value;
+    if (val === 'custom') {
+      document.getElementById('custom-range').classList.add('show');
+      return;
+    }
+    document.getElementById('custom-range').classList.remove('show');
+    APP_STATE.period = val;
+    APP_STATE.start = null;
+    APP_STATE.end = null;
+    APP_STATE.txPage = 1;
+    writeQueryString();
+    renderCurrentTab();
+  }
+
+  function applyCustomRange() {
+    const s = document.getElementById('custom-start').value;
+    const e = document.getElementById('custom-end').value;
+    if (!s || !e) {
+      alert('Pick both start and end dates.');
+      return;
+    }
+    APP_STATE.period = null;
+    APP_STATE.start = s;
+    APP_STATE.end = e;
+    APP_STATE.txPage = 1;
+    writeQueryString();
+    renderCurrentTab();
+  }
+
+  function onAccountChange(e) {
+    APP_STATE.account = e.target.value || '';
+    APP_STATE.txPage = 1;
+    writeQueryString();
+    renderCurrentTab();
+  }
+
+  function onCategoryChange(e) {
+    APP_STATE.category = e.target.value || '';
+    APP_STATE.txPage = 1;
+    writeQueryString();
+    renderCurrentTab();
+  }
+
+  // ── Tab switching ──────────────────────────────────────
+
+  function switchTab(tab) {
+    APP_STATE.tab = tab;
+    // If user switches to a tab whose default period differs, only reset if no explicit selection.
+    document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+    document.querySelectorAll('.panel').forEach(el => el.classList.toggle('active', el.id === 'panel-' + tab));
+    writeQueryString();
+    buildPeriodSelector();
+    renderCurrentTab();
+  }
+
+  function renderCurrentTab() {
+    switch (APP_STATE.tab) {
+      case 'spending':     renderSpending();     break;
+      case 'income':       renderIncome();       break;
+      case 'transactions': renderTransactions(); break;
+      case 'cashflow':     renderCashflow();     break;
+      case 'pinned':       /* static empty */    break;
+    }
+  }
+
+  // ── Period → query string for backend ──────────────────
+
+  function periodQueryString() {
+    const p = new URLSearchParams();
+    if (APP_STATE.start && APP_STATE.end) {
+      p.set('start', APP_STATE.start);
+      p.set('end', APP_STATE.end);
+    } else if (APP_STATE.period) {
+      p.set('period', APP_STATE.period);
+    }
+    if (APP_STATE.account) p.set('account', APP_STATE.account);
+    if (APP_STATE.category) p.set('category', APP_STATE.category);
+    return p.toString();
+  }
+
+  // ── Formatting helpers ────────────────────────────────
+
+  function fmt(amount) {
+    return '$' + Number(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function fmtSigned(amount) {
+    const n = Number(amount || 0);
+    const sign = n < 0 ? '-' : '';
+    return sign + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function capitalize(str) {
+    return String(str || '').replace(/\b\w/g, c => c.toUpperCase());
+  }
+  function monthLabel(yyyyMM) {
+    if (!yyyyMM) return '';
+    const [year, month] = yyyyMM.split('-');
+    const date = new Date(Number(year), Number(month) - 1, 1);
+    return date.toLocaleString('en-US', { month: 'short', year: '2-digit' });
+  }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // ── Palette for donut slices ──────────────────────────
+  // Distinct categorical hues (not opacity steps of one color) so adjacent
+  // slices are easy to tell apart. Indigo stays first to anchor the brand;
+  // slate is last for the collapsed "Other" / Uncategorized bucket. No pure
+  // red — that reads as "alarm" on a finance surface.
+  const CATEGORY_PALETTE = ['#4f46e5','#06b6d4','#f59e0b','#ec4899','#10b981','#f97316','#8b5cf6','#0ea5e9','#84cc16','#64748b'];
+
+  // Color for slice i. We don't know the category count ahead of time, so this
+  // is NOT a fixed list that wraps around (which would repeat colors). For the
+  // first 10 we use the hand-picked palette above; beyond that we generate hues
+  // spaced by the golden angle (137.5°), which keeps any number of slices
+  // visually distinct. Donuts also collapse their tail into "Other" (≤8 slices),
+  // so in practice the curated palette is all that ever shows.
+  function donutColor(i) {
+    if (i < CATEGORY_PALETTE.length) return CATEGORY_PALETTE[i];
+    const hue = Math.round((i * 137.508) % 360);
+    return `hsl(${hue}, 68%, 55%)`;
+  }
+
+  // ── Spending tab ──────────────────────────────────────
+
+  async function renderSpending() {
+    const url = '/dashboard/spending?' + periodQueryString();
+    let data;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (err) {
+      document.getElementById('spending-total').textContent = '—';
+      document.getElementById('spending-breakdown-body').innerHTML =
+        `<tr><td colspan="3" class="empty-state">Could not load spending data. Check that the backend is running.</td></tr>`;
+      drawSpendingDonut([]);
+      return;
+    }
+
+    const total = data.total_spend || 0;
+    document.getElementById('spending-total').textContent = fmt(total);
+
+    const cats = (data.categories || []).slice().sort((a, b) => (b.amount || 0) - (a.amount || 0));
+
+    // Donut data — collapse tail if > 8
+    let donutCats = cats;
+    if (cats.length > 8) {
+      const head = cats.slice(0, 7);
+      const tailTotal = cats.slice(7).reduce((s, c) => s + (c.amount || 0), 0);
+      donutCats = [...head, { name: 'Other', amount: tailTotal }];
+    }
+    drawSpendingDonut(donutCats);
+
+    // Breakdown table
+    const tbody = document.getElementById('spending-breakdown-body');
+    if (cats.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="3" class="empty-state">No spending in this period.</td></tr>`;
+    } else {
+      tbody.innerHTML = cats.map(c => `
+        <tr>
+          <td class="cat">${escapeHtml(c.name)}</td>
+          <td class="num">${fmt(c.amount)}</td>
+          <td class="num"><span class="muted-avg">⌀ ${fmt(c.avg_6mo || 0)}</span></td>
+        </tr>
+      `).join('');
+    }
+
+    loadInsight('spending');
+  }
+
+  function drawSpendingDonut(cats) {
+    const ctx = document.getElementById('spending-donut').getContext('2d');
+    if (charts.spendingDonut) charts.spendingDonut.destroy();
+    if (!cats || cats.length === 0) {
+      charts.spendingDonut = new Chart(ctx, {
+        type: 'doughnut',
+        data: { labels: ['No data'], datasets: [{ data: [1], backgroundColor: ['#e5e7eb'], borderWidth: 0 }] },
+        options: { plugins: { legend: { display: false }, tooltip: { enabled: false } }, cutout: '68%' }
+      });
+      return;
+    }
+    charts.spendingDonut = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: cats.map(c => capitalize(c.name)),
+        datasets: [{
+          data: cats.map(c => c.amount),
+          backgroundColor: cats.map((_, i) => donutColor(i)),
+          borderWidth: 2,
+          borderColor: 'white',
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '68%',
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { boxWidth: 10, font: { size: 11 }, color: '#374151' }
+          },
+          tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + fmt(ctx.raw) } }
+        }
+      }
+    });
+  }
+
+  // ── Income tab ────────────────────────────────────────
+
+  async function renderIncome() {
+    const url = '/dashboard/income?' + periodQueryString();
+    let data;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (err) {
+      document.getElementById('income-total').textContent = '—';
+      drawIncomeDonut([]);
+      drawIncomeHistory([], 0);
+      return;
+    }
+
+    const total = data.total_income || 0;
+    document.getElementById('income-total').textContent = fmt(total);
+
+    // Collapse the tail into "Other" so the donut never shows more slices than
+    // the palette has distinct colors (mirrors the Spending donut).
+    let subs = (data.subcategories || []).slice().sort((a, b) => (b.amount || 0) - (a.amount || 0));
+    if (subs.length > 8) {
+      const head = subs.slice(0, 7);
+      const tailTotal = subs.slice(7).reduce((s, x) => s + (x.amount || 0), 0);
+      subs = [...head, { name: 'Other', amount: tailTotal }];
+    }
+    drawIncomeDonut(subs);
+    drawIncomeHistory(data.monthly_history || [], data.avg_monthly || 0);
+
+    loadInsight('income');
+  }
+
+  function drawIncomeDonut(subs) {
+    const ctx = document.getElementById('income-donut').getContext('2d');
+    if (charts.incomeDonut) charts.incomeDonut.destroy();
+    if (!subs || subs.length === 0) {
+      charts.incomeDonut = new Chart(ctx, {
+        type: 'doughnut',
+        data: { labels: ['No data'], datasets: [{ data: [1], backgroundColor: ['#e5e7eb'], borderWidth: 0 }] },
+        options: { plugins: { legend: { display: false }, tooltip: { enabled: false } }, cutout: '68%' }
+      });
+      return;
+    }
+    charts.incomeDonut = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: subs.map(s => capitalize(s.name)),
+        datasets: [{
+          data: subs.map(s => s.amount),
+          backgroundColor: subs.map((_, i) => donutColor(i)),
+          borderWidth: 2,
+          borderColor: 'white',
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '68%',
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { boxWidth: 10, font: { size: 11 }, color: '#374151' }
+          },
+          tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + fmt(ctx.raw) } }
+        }
+      }
+    });
+  }
+
+  function drawIncomeHistory(history, avg) {
+    const ctx = document.getElementById('income-history').getContext('2d');
+    if (charts.incomeHistory) charts.incomeHistory.destroy();
+    if (!history || history.length === 0) {
+      charts.incomeHistory = new Chart(ctx, {
+        type: 'bar',
+        data: { labels: [], datasets: [] },
+        options: { plugins: { legend: { display: false } } }
+      });
+      return;
+    }
+    const labels = history.map(h => monthLabel(h.month));
+    const values = history.map(h => h.total || 0);
+
+    charts.incomeHistory = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          {
+            data: values,
+            backgroundColor: 'rgba(45, 212, 191, 0.75)',
+            borderColor: '#14b8a6',
+            borderWidth: 1,
+            borderRadius: 4,
+            label: 'Income',
+          },
+          {
+            type: 'line',
+            data: labels.map(() => avg),
+            borderColor: 'rgba(45, 212, 191, 0.6)',
+            borderDash: [4, 4],
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false,
+            label: 'Avg',
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => ' ' + fmt(ctx.raw) } }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#6b7280', font: { size: 11 } } },
+          y: {
+            beginAtZero: true,
+            grid: { color: 'rgba(0,0,0,0.04)' },
+            ticks: { color: '#6b7280', font: { size: 11 }, callback: v => '$' + v.toLocaleString() }
+          }
+        }
+      }
+    });
+  }
+
+  // ── Transactions tab ──────────────────────────────────
+
+  async function renderTransactions() {
+    // Sync filter inputs from state
+    document.getElementById('tx-filter-start').value = APP_STATE.start || '';
+    document.getElementById('tx-filter-end').value = APP_STATE.end || '';
+    document.getElementById('tx-filter-min').value = APP_STATE.txMin || '';
+    document.getElementById('tx-filter-max').value = APP_STATE.txMax || '';
+    document.getElementById('tx-filter-q').value = APP_STATE.txQuery || '';
+
+    const params = new URLSearchParams();
+    if (APP_STATE.start) params.set('start', APP_STATE.start);
+    if (APP_STATE.end) params.set('end', APP_STATE.end);
+    else if (APP_STATE.period) params.set('period', APP_STATE.period);
+    if (APP_STATE.category) params.set('category', APP_STATE.category);
+    if (APP_STATE.account) params.set('account', APP_STATE.account);
+    if (APP_STATE.txMin) params.set('min', APP_STATE.txMin);
+    if (APP_STATE.txMax) params.set('max', APP_STATE.txMax);
+    if (APP_STATE.txQuery) params.set('q', APP_STATE.txQuery);
+    params.set('page', String(APP_STATE.txPage));
+
+    const tbody = document.getElementById('tx-table-body');
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">Loading…</td></tr>`;
+
+    let data;
+    try {
+      const res = await fetch('/dashboard/transactions?' + params.toString());
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="5" class="empty-state">Could not load transactions.</td></tr>`;
+      document.getElementById('tx-page-info').textContent = '—';
+      return;
+    }
+
+    const rows = data.rows || [];
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="empty-state">No transactions match these filters.</td></tr>`;
+    } else {
+      tbody.innerHTML = rows.map(r => {
+        const amt = Number(r.amount_signed || 0);
+        const amtClass = amt < 0 ? 'amt-neg' : 'amt-pos';
+        const transferClass = r.is_paired_transfer ? ' transfer-row' : '';
+        const transferTag = r.is_paired_transfer ? '<span class="transfer-tag">↻ transfer</span>' : '';
+        return `
+          <tr class="${transferClass.trim()}">
+            <td>${escapeHtml(r.date)}</td>
+            <td class="merchant">${escapeHtml(r.merchant)}${transferTag}</td>
+            <td class="account">${escapeHtml(r.account_label || '')}</td>
+            <td class="category">${escapeHtml(r.category || '')}</td>
+            <td class="num ${amtClass}">${fmtSigned(amt)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    const total = data.total || 0;
+    const pageSize = data.page_size || 50;
+    const page = data.page || APP_STATE.txPage;
+    const startIdx = total === 0 ? 0 : (page - 1) * pageSize + 1;
+    const endIdx = Math.min(page * pageSize, total);
+    document.getElementById('tx-page-info').textContent =
+      total === 0 ? 'No results' : `Showing ${startIdx}–${endIdx} of ${total}`;
+    document.getElementById('tx-prev-btn').disabled = page <= 1;
+    document.getElementById('tx-next-btn').disabled = endIdx >= total;
+
+    populateTxFilterDropdowns(data);
+    loadInsight('transactions');
+  }
+
+  function populateTxFilterDropdowns(data) {
+    // Fill category dropdown from facets if backend returns them, else from current rows
+    const catSel = document.getElementById('tx-filter-category');
+    const accSel = document.getElementById('tx-filter-account');
+    const facets = data.facets || {};
+    const cats = facets.categories || [];
+    const accs = facets.accounts || [];
+
+    if (cats.length > 0 && catSel.options.length <= 1) {
+      cats.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.value || c;
+        opt.textContent = capitalize(c.label || c.value || c);
+        if (opt.value === APP_STATE.category) opt.selected = true;
+        catSel.appendChild(opt);
+      });
+    }
+    if (accs.length > 0 && accSel.options.length <= 1) {
+      accs.forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a.value || a;
+        opt.textContent = a.label || a.value || a;
+        if (opt.value === APP_STATE.account) opt.selected = true;
+        accSel.appendChild(opt);
+      });
+    }
+  }
+
+  function applyTxFilters() {
+    APP_STATE.start = document.getElementById('tx-filter-start').value || null;
+    APP_STATE.end = document.getElementById('tx-filter-end').value || null;
+    APP_STATE.category = document.getElementById('tx-filter-category').value || '';
+    APP_STATE.account = document.getElementById('tx-filter-account').value || '';
+    APP_STATE.txMin = document.getElementById('tx-filter-min').value || '';
+    APP_STATE.txMax = document.getElementById('tx-filter-max').value || '';
+    APP_STATE.txQuery = document.getElementById('tx-filter-q').value || '';
+    APP_STATE.txPage = 1;
+    if (APP_STATE.start && APP_STATE.end) APP_STATE.period = null;
+    writeQueryString();
+    renderTransactions();
+  }
+
+  function changePage(delta) {
+    APP_STATE.txPage = Math.max(1, APP_STATE.txPage + delta);
+    writeQueryString();
+    renderTransactions();
+  }
+
+  // ── Cash Flow tab ─────────────────────────────────────
+
+  async function renderCashflow() {
+    let data;
+    try {
+      const res = await fetch('/dashboard/cashflow?months=12');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (err) {
+      document.getElementById('cashflow-summary').innerHTML =
+        `<span class="label">Could not load cash flow data.</span>`;
+      drawCashflowChart([], [], [], 0);
+      renderFixedFlexTable([], [], []);
+      return;
+    }
+
+    const months = data.months || [];
+    const income = data.income_per_month || [];
+    const spending = data.spending_per_month || [];
+    const avgSpending = data.avg_spending || 0;
+    const avgIncome = (income.length > 0)
+      ? income.reduce((s, v) => s + v, 0) / income.length
+      : 0;
+    const avgNet = data.avg_net || 0;
+
+    drawCashflowChart(months, income, spending, avgSpending);
+
+    const totalIncome = income.reduce((s, v) => s + v, 0);
+    const totalSpending = spending.reduce((s, v) => s + v, 0);
+    const net = totalIncome - totalSpending;
+    const isShortfall = net < 0;
+    const netClass = isShortfall ? 'shortfall' : 'positive';
+    const netLabel = isShortfall ? 'Shortfall' : 'Net';
+    const avgNetClass = avgNet < 0 ? 'shortfall' : 'positive';
+
+    document.getElementById('cashflow-summary').innerHTML = `
+      <span><span class="label">Income</span> <span class="num">${fmt(totalIncome)}</span></span>
+      <span><span class="label">Spending</span> <span class="num">${fmt(totalSpending)}</span></span>
+      <span><span class="label">${netLabel}</span> <span class="num ${netClass}">${fmtSigned(net)}</span></span>
+      <span><span class="label">Avg spending</span> <span class="num">${fmt(avgSpending)}/mo</span></span>
+      <span><span class="label">Avg net</span> <span class="num ${avgNetClass}">${fmtSigned(avgNet)}/mo</span></span>
+    `;
+
+    renderFixedFlexTable(months, data.fixed_categories || [], data.flexible_categories || []);
+    loadInsight('cashflow');
+  }
+
+  function drawCashflowChart(months, income, spending, avgSpending) {
+    const ctx = document.getElementById('cashflow-chart').getContext('2d');
+    if (charts.cashflow) charts.cashflow.destroy();
+
+    if (!months.length) {
+      charts.cashflow = new Chart(ctx, {
+        type: 'bar',
+        data: { labels: [], datasets: [] },
+        options: { plugins: { legend: { display: false } } }
+      });
+      return;
+    }
+
+    charts.cashflow = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: months.map(monthLabel),
+        datasets: [
+          {
+            label: 'Income',
+            data: income,
+            backgroundColor: 'rgba(45, 212, 191, 0.85)',
+            borderColor: '#14b8a6',
+            borderWidth: 1,
+            borderRadius: 4,
+          },
+          {
+            label: 'Spending',
+            data: spending,
+            backgroundColor: 'rgba(79, 70, 229, 0.85)',
+            borderColor: '#4f46e5',
+            borderWidth: 1,
+            borderRadius: 4,
+          },
+          {
+            type: 'line',
+            label: 'Avg spending',
+            data: months.map(() => avgSpending),
+            borderColor: 'rgba(79, 70, 229, 0.45)',
+            borderDash: [5, 5],
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: true, position: 'top', labels: { boxWidth: 10, font: { size: 11 } } },
+          tooltip: { callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + fmt(ctx.raw) } }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#6b7280', font: { size: 11 } } },
+          y: {
+            beginAtZero: true,
+            grid: { color: 'rgba(0,0,0,0.04)' },
+            ticks: { color: '#6b7280', font: { size: 11 }, callback: v => '$' + v.toLocaleString() }
+          }
+        }
+      }
+    });
+  }
+
+  function renderFixedFlexTable(months, fixedCats, flexCats) {
+    // Show last N months (cap at 6 to keep table reasonable)
+    const N = Math.min(6, months.length);
+    const cols = months.slice(-N);
+
+    const thead = document.getElementById('ff-thead');
+    const tbody = document.getElementById('ff-tbody');
+
+    thead.innerHTML = `
+      <tr>
+        <th>Category</th>
+        ${cols.map(m => `<th>${monthLabel(m)}</th>`).join('')}
+        <th class="avg-col">Avg/mo</th>
+        <th class="total-col">12-mo Total</th>
+      </tr>
+    `;
+
+    function catRows(cats) {
+      if (!cats.length) {
+        return `<tr><td colspan="${cols.length + 3}" style="color:#9ca3af;font-style:italic">No categories in this group.</td></tr>`;
+      }
+      return cats.map(c => {
+        const monthly = c.monthly || {};
+        const total = Object.values(monthly).reduce((s, v) => s + (Number(v) || 0), 0);
+        return `
+          <tr>
+            <td>${escapeHtml(c.name)}</td>
+            ${cols.map(m => `<td>${fmt(monthly[m] || 0)}</td>`).join('')}
+            <td class="avg-col">${fmt(c.avg || 0)}</td>
+            <td class="total-col">${fmt(total)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    tbody.innerHTML = `
+      <tr class="group-header"><td colspan="${cols.length + 3}">Fixed expenses</td></tr>
+      ${catRows(fixedCats)}
+      <tr class="group-header"><td colspan="${cols.length + 3}">Flexible expenses</td></tr>
+      ${catRows(flexCats)}
+    `;
+  }
+
+  // ── Insights ──────────────────────────────────────────
+
+  function insightPeriodKey() {
+    if (APP_STATE.start && APP_STATE.end) return `range:${APP_STATE.start}..${APP_STATE.end}`;
+    return APP_STATE.period || defaultPeriodFor(APP_STATE.tab);
+  }
+
+  async function loadInsight(chartKey, opts = {}) {
+    const p = new URLSearchParams();
+    if (APP_STATE.start && APP_STATE.end) {
+      p.set('start', APP_STATE.start);
+      p.set('end', APP_STATE.end);
+    } else if (APP_STATE.period) {
+      p.set('period', APP_STATE.period);
+    }
+    if (opts.refresh) p.set('refresh', '1');
+
+    const url = `/dashboard/insights/${chartKey}?${p.toString()}`;
+    try {
+      const res = await fetch(url, { method: opts.refresh ? 'GET' : 'GET' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      paintInsight(chartKey, data);
+    } catch (err) {
+      paintInsight(chartKey, {
+        annotation: 'Insight not available yet — try refresh in a moment.',
+        suggestions: []
+      });
+    }
+  }
+
+  function paintInsight(chartKey, data) {
+    const annEl = document.getElementById(`${chartKey}-annotation`);
+    if (!annEl) return;
+    annEl.textContent = data.annotation || data.annotation_text || '';
+
+    const sugList = document.getElementById(`${chartKey}-suggestions`);
+    const wrapper = document.getElementById(`${chartKey}-suggestions-wrapper`);
+    const suggestions = data.suggestions || [];
+    if (sugList) {
+      if (suggestions.length > 0) {
+        sugList.innerHTML = suggestions.map(s => `<li>${escapeHtml(s)}</li>`).join('');
+        if (wrapper) wrapper.style.display = 'block';
+        else sugList.style.display = 'block';
+      } else {
+        sugList.innerHTML = '';
+        if (wrapper) wrapper.style.display = 'none';
+        else sugList.style.display = 'none';
+      }
+    }
+  }
+
+  async function refreshInsight(chartKey) {
+    const btns = document.querySelectorAll(`#${chartKey}-insight .refresh-btn`);
+    btns.forEach(b => { b.disabled = true; b.textContent = 'Refreshing…'; });
+
+    const annEl = document.getElementById(`${chartKey}-annotation`);
+    if (annEl) {
+      annEl.innerHTML = `<div class="skeleton" style="width:90%"></div><div class="skeleton" style="width:70%"></div>`;
+    }
+
+    const p = new URLSearchParams();
+    if (APP_STATE.start && APP_STATE.end) {
+      p.set('start', APP_STATE.start);
+      p.set('end', APP_STATE.end);
+    } else if (APP_STATE.period) {
+      p.set('period', APP_STATE.period);
+    }
+
+    try {
+      const res = await fetch(`/dashboard/insights/${chartKey}/refresh?${p.toString()}`, { method: 'POST' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      paintInsight(chartKey, data);
+    } catch (err) {
+      if (annEl) annEl.textContent = 'Could not refresh insight right now.';
+    }
+
+    btns.forEach(b => {
+      b.disabled = false;
+      b.textContent = chartKey === 'transactions' ? 'Refresh ↻' : 'Refresh insights ↻';
+    });
+  }
+
+  // ── Drawer init ───────────────────────────────────────
+
+  function initDrawerFromStorage() {
+    let open = 'false';
+    try { open = localStorage.getItem('chatDrawerOpen') || 'false'; } catch (e) {}
+    if (open === 'true') {
+      // The functions live in _chat_drawer.html partial
+      if (typeof openChatDrawer === 'function') openChatDrawer();
+    } else {
+      // ensure bubble visible
+      const bubble = document.getElementById('chat-bubble');
+      if (bubble) bubble.classList.remove('hidden');
+    }
+  }
+
+  // ── Boot ──────────────────────────────────────────────
+
+  document.addEventListener('DOMContentLoaded', () => {
+    parseQueryString();
+    document.querySelectorAll('.tab').forEach(el =>
+      el.classList.toggle('active', el.dataset.tab === APP_STATE.tab)
+    );
+    document.querySelectorAll('.panel').forEach(el =>
+      el.classList.toggle('active', el.id === 'panel-' + APP_STATE.tab)
+    );
+    buildPeriodSelector();
+    initDrawerFromStorage();
+    renderCurrentTab();
+  });
+</script>
+</body>
+</html>

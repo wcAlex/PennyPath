@@ -1,0 +1,504 @@
+{# Chat drawer partial — collapsed by default. Open/close controlled by dashboard.html JS. #}
+<style>
+  #chat-drawer {
+    display: none;               /* default closed; flipped by dashboard.html init */
+    position: fixed;
+    top: 52px;
+    right: 0;
+    bottom: 0;
+    width: 380px;
+    background: white;
+    border-left: 1px solid #e5e7eb;
+    box-shadow: -4px 0 16px rgba(0,0,0,0.06);
+    z-index: 90;
+    flex-direction: column;
+  }
+  #chat-drawer.open { display: flex; }
+
+  #chat-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fafbff;
+    flex-shrink: 0;
+  }
+  #chat-drawer-header .resume-btn {
+    background: transparent;
+    border: 1px solid #d1d5db;
+    color: #374151;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    flex: 1;
+    text-align: left;
+    transition: background 0.15s;
+  }
+  #chat-drawer-header .resume-btn:hover { background: #f3f4f6; }
+
+  #chat-drawer-header .clear-btn {
+    background: transparent;
+    border: 1px solid #d1d5db;
+    color: #6b7280;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  #chat-drawer-header .clear-btn:hover {
+    color: #ef4444;
+    border-color: #fca5a5;
+  }
+
+  #chat-drawer-header .close-btn {
+    background: transparent;
+    border: none;
+    color: #9ca3af;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 6px;
+    line-height: 1;
+  }
+  #chat-drawer-header .close-btn:hover { color: #1a1a2e; }
+
+  #chat-drawer #resume-list {
+    display: none;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fafbff;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #6b7280;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  #chat-drawer #resume-list.open { display: block; }
+  #chat-drawer #resume-list .session-row {
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #chat-drawer #resume-list .session-row:hover { background: #eef2ff; }
+  #chat-drawer #resume-list .session-row.active { color: #4f46e5; font-weight: 600; }
+
+  #chat-drawer-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: #f7f8fb;
+  }
+
+  #chat-drawer .msg {
+    max-width: 90%;
+    border-radius: 12px;
+    padding: 9px 12px;
+    line-height: 1.5;
+    font-size: 13px;
+    word-break: break-word;
+  }
+  #chat-drawer .msg.user {
+    align-self: flex-end;
+    background: #4f46e5;
+    color: white;
+    border-bottom-right-radius: 4px;
+  }
+  #chat-drawer .msg.assistant {
+    align-self: flex-start;
+    background: white;
+    color: #1a1a2e;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    border-bottom-left-radius: 4px;
+  }
+  #chat-drawer .msg.assistant p { margin: 4px 0; }
+  #chat-drawer .msg.assistant p:first-child { margin-top: 0; }
+  #chat-drawer .msg.assistant p:last-child { margin-bottom: 0; }
+  #chat-drawer .msg.assistant ul,
+  #chat-drawer .msg.assistant ol { padding-left: 16px; margin: 4px 0; }
+  #chat-drawer .msg.assistant code {
+    background: #f3f4f6;
+    color: #e11d48;
+    padding: 1px 4px;
+    border-radius: 4px;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85em;
+  }
+  #chat-drawer .msg.attachment {
+    display: block;
+    max-width: 180px;
+    max-height: 140px;
+    border-radius: 8px;
+    margin-top: 6px;
+  }
+
+  #chat-drawer .typing {
+    align-self: flex-start;
+    background: white;
+    border-radius: 12px;
+    border-bottom-left-radius: 4px;
+    padding: 10px 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  #chat-drawer .typing span {
+    display: inline-block;
+    width: 6px; height: 6px;
+    background: #9ca3af;
+    border-radius: 50%;
+    margin: 0 2px;
+    animation: bounce 1.1s infinite ease-in-out;
+  }
+  #chat-drawer .typing span:nth-child(2) { animation-delay: 0.18s; }
+  #chat-drawer .typing span:nth-child(3) { animation-delay: 0.36s; }
+
+  #chat-drawer-input {
+    border-top: 1px solid #e5e7eb;
+    padding: 10px 12px;
+    background: white;
+    flex-shrink: 0;
+  }
+  #chat-drawer-input .preview {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: #6b7280;
+  }
+  #chat-drawer-input .preview.show { display: flex; }
+  #chat-drawer-input .preview img {
+    width: 36px; height: 36px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+  }
+  #chat-drawer-input .preview .file-name {
+    flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #chat-drawer-input .preview .remove-btn {
+    background: #ef4444;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 18px; height: 18px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  #chat-drawer-input .input-row {
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+  }
+  #chat-drawer-input .attach-label {
+    cursor: pointer;
+    color: #9ca3af;
+    padding: 6px 4px;
+    border-radius: 6px;
+    font-size: 16px;
+    flex-shrink: 0;
+    transition: color 0.15s;
+  }
+  #chat-drawer-input .attach-label:hover { color: #4f46e5; }
+  #chat-drawer-input input[type="file"] { display: none; }
+
+  #chat-drawer-input textarea {
+    flex: 1;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    resize: none;
+    min-height: 36px;
+    max-height: 110px;
+    line-height: 1.4;
+    transition: border-color 0.15s;
+  }
+  #chat-drawer-input textarea:focus { outline: none; border-color: #4f46e5; }
+  #chat-drawer-input textarea::placeholder { color: #9ca3af; }
+
+  #chat-drawer-input .send-btn {
+    background: #4f46e5;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  #chat-drawer-input .send-btn:hover { background: #4338ca; }
+  #chat-drawer-input .send-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+  /* Floating bubble (visible only when drawer closed) */
+  #chat-bubble {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: #4f46e5;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(79,70,229,0.45);
+    z-index: 95;
+    transition: transform 0.15s, box-shadow 0.15s;
+    border: none;
+    font-size: 22px;
+  }
+  #chat-bubble:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(79,70,229,0.55);
+  }
+  #chat-bubble.hidden { display: none; }
+
+  #chat-bubble .bubble-label {
+    position: absolute;
+    right: 64px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: #1a1a2e;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  #chat-bubble:hover .bubble-label { opacity: 1; }
+
+  /* Unread dot slot (markup only — not wired in 1B) */
+  #chat-bubble .unread-dot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 9px;
+    height: 9px;
+    background: #ef4444;
+    border-radius: 50%;
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    #chat-drawer {
+      top: 52px;
+      width: 100vw;
+      left: 0;
+      right: 0;
+    }
+  }
+</style>
+
+<aside id="chat-drawer" aria-label="Companion chat">
+  <div id="chat-drawer-header">
+    <button class="resume-btn" type="button" onclick="toggleResumeList()" title="Resume a previous conversation">
+      Resume previous conversation ▾
+    </button>
+    <button class="clear-btn" type="button" onclick="clearDrawerChat()">Clear</button>
+    <button class="close-btn" type="button" onclick="closeChatDrawer()" aria-label="Close chat">×</button>
+  </div>
+
+  <div id="resume-list" aria-hidden="true">
+    <div class="session-row active">Current session</div>
+    <div class="session-row" style="opacity:0.5">(Older sessions appear here)</div>
+  </div>
+
+  <div id="chat-drawer-messages">
+    <div class="msg assistant">
+      Hi — I'm here whenever you want to dig into a number. Ask me anything you see on the dashboard.
+    </div>
+  </div>
+
+  <div id="chat-drawer-input">
+    <div class="preview" id="drawer-preview">
+      <img id="drawer-preview-img" src="" alt="">
+      <span class="file-name" id="drawer-preview-name"></span>
+      <button class="remove-btn" type="button" onclick="drawerRemoveImage()">×</button>
+    </div>
+    <div class="input-row">
+      <label class="attach-label" title="Attach image">
+        📎
+        <input id="drawer-file-input" type="file" accept="image/*" onchange="drawerHandleFile(event)">
+      </label>
+      <textarea
+        id="drawer-text-input"
+        rows="1"
+        placeholder="Ask your companion…"
+        onkeydown="drawerHandleKey(event)"
+        oninput="drawerAutoResize(this)"
+      ></textarea>
+      <button class="send-btn" type="button" onclick="drawerSendMessage()">Send</button>
+    </div>
+  </div>
+</aside>
+
+<button id="chat-bubble" type="button" onclick="openChatDrawer()" aria-label="Open chat">
+  💬
+  <span class="unread-dot"></span>
+  <span class="bubble-label">Ask your companion</span>
+</button>
+
+<script>
+  // Drawer is initialised from localStorage by dashboard.html on DOMContentLoaded.
+
+  function openChatDrawer() {
+    document.getElementById('chat-drawer').classList.add('open');
+    document.getElementById('chat-bubble').classList.add('hidden');
+    document.body.classList.add('drawer-open');
+    try { localStorage.setItem('chatDrawerOpen', 'true'); } catch (e) {}
+    setTimeout(() => {
+      const ti = document.getElementById('drawer-text-input');
+      if (ti) ti.focus();
+      drawerScrollToBottom();
+    }, 50);
+  }
+
+  function closeChatDrawer() {
+    document.getElementById('chat-drawer').classList.remove('open');
+    document.getElementById('chat-bubble').classList.remove('hidden');
+    document.body.classList.remove('drawer-open');
+    try { localStorage.setItem('chatDrawerOpen', 'false'); } catch (e) {}
+  }
+
+  function toggleResumeList() {
+    const el = document.getElementById('resume-list');
+    if (!el) return;
+    el.classList.toggle('open');
+  }
+
+  async function clearDrawerChat() {
+    try {
+      await fetch('/memory', { method: 'DELETE' });
+    } catch (e) {}
+    const messages = document.getElementById('chat-drawer-messages');
+    messages.innerHTML = '';
+    drawerAddMessage('assistant', "Fresh start. What's on your mind?");
+  }
+
+  let drawerSelectedFile = null;
+
+  function drawerAutoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 110) + 'px';
+  }
+
+  function drawerHandleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      drawerSendMessage();
+    }
+  }
+
+  function drawerHandleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    drawerSelectedFile = file;
+    document.getElementById('drawer-preview-img').src = URL.createObjectURL(file);
+    document.getElementById('drawer-preview-name').textContent = file.name;
+    document.getElementById('drawer-preview').classList.add('show');
+  }
+
+  function drawerRemoveImage() {
+    drawerSelectedFile = null;
+    document.getElementById('drawer-file-input').value = '';
+    document.getElementById('drawer-preview').classList.remove('show');
+    document.getElementById('drawer-preview-img').src = '';
+  }
+
+  function drawerScrollToBottom() {
+    const el = document.getElementById('chat-drawer-messages');
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  function drawerAddMessage(role, text, imageSrc) {
+    const messages = document.getElementById('chat-drawer-messages');
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    if (role === 'assistant' && window.marked) {
+      div.innerHTML = window.marked.parse(text || '');
+    } else {
+      const p = document.createElement('p');
+      p.textContent = text || (imageSrc ? '(image only)' : '');
+      div.appendChild(p);
+      if (imageSrc) {
+        const img = document.createElement('img');
+        img.src = imageSrc;
+        img.className = 'attachment';
+        div.appendChild(img);
+      }
+    }
+    messages.appendChild(div);
+    drawerScrollToBottom();
+    return div;
+  }
+
+  function drawerAddTyping() {
+    const messages = document.getElementById('chat-drawer-messages');
+    const div = document.createElement('div');
+    div.className = 'typing';
+    div.id = 'drawer-typing-indicator';
+    div.innerHTML = '<span></span><span></span><span></span>';
+    messages.appendChild(div);
+    drawerScrollToBottom();
+  }
+
+  function drawerRemoveTyping() {
+    const el = document.getElementById('drawer-typing-indicator');
+    if (el) el.remove();
+  }
+
+  async function drawerSendMessage() {
+    const input = document.getElementById('drawer-text-input');
+    const text = input.value.trim();
+    if (!text && !drawerSelectedFile) return;
+
+    const sendBtn = document.querySelector('#chat-drawer-input .send-btn');
+    sendBtn.disabled = true;
+
+    const imageSrc = drawerSelectedFile ? URL.createObjectURL(drawerSelectedFile) : null;
+    drawerAddMessage('user', text, imageSrc);
+
+    input.value = '';
+    input.style.height = 'auto';
+
+    const formData = new FormData();
+    formData.append('message', text);
+    if (drawerSelectedFile) formData.append('image', drawerSelectedFile);
+    drawerRemoveImage();
+
+    drawerAddTyping();
+
+    try {
+      const res = await fetch('/chat', { method: 'POST', body: formData });
+      const data = await res.json();
+      drawerRemoveTyping();
+      if (data.error) {
+        drawerAddMessage('assistant', '⚠️ ' + data.error);
+      } else {
+        drawerAddMessage('assistant', data.response || '');
+      }
+    } catch (err) {
+      drawerRemoveTyping();
+      drawerAddMessage('assistant', 'Connection error. Is the server still running?');
+    }
+
+    sendBtn.disabled = false;
+    input.focus();
+  }
+</script>
