@@ -179,6 +179,125 @@ class TestParseReply:
         assert _parse_reply("").text == ""
         assert _parse_reply("   ").text == ""
 
+    def test_envelope_embedded_in_prose_is_extracted(self):
+        # Matches the exact failure mode the user reported: DeepSeek wrote a
+        # warm intro, then dropped the JSON envelope inline, then continued
+        # with analysis prose. The drawer was rendering the JSON as text.
+        content = (
+            "Of course! Here's a bar chart showing how your top dining "
+            "merchants stack up in April:\n"
+            '{"text":"","blocks":[{"type":"chart_spec",'
+            '"title":"Top Dining Merchants — April 2026","chart_type":"bar",'
+            '"labels":["Seattle Pacific Table","Fortune Feast"],'
+            '"series":[{"name":"Spent","data":[605,188.33]}]}]}\n'
+            "**Seattle Pacific Table** towers over everything at $605.\n"
+            "Want me to pull up how March looked so you can compare?"
+        )
+        r = _parse_reply(content)
+        # The chart block was lifted out.
+        assert len(r.blocks) == 1
+        assert r.blocks[0]["type"] == "chart_spec"
+        assert r.blocks[0]["title"] == "Top Dining Merchants — April 2026"
+        assert r.blocks[0]["labels"] == ["Seattle Pacific Table", "Fortune Feast"]
+        # The surrounding prose became the reply text. No raw JSON leakage.
+        assert "Here's a bar chart" in r.text
+        assert "towers over everything" in r.text
+        assert "Want me to pull up" in r.text
+        assert "chart_spec" not in r.text
+        assert '"blocks"' not in r.text
+
+    def test_envelope_embedded_with_envelope_text_when_no_surrounding(self):
+        # Envelope only, but with a populated text field — equivalent to
+        # case (1) of _parse_reply; verify both paths produce the same result.
+        content = (
+            '{"text":"Here it is:","blocks":'
+            '[{"type":"table","title":"X","columns":["a"],"rows":[["b"]]}]}'
+        )
+        r = _parse_reply(content)
+        assert r.text == "Here it is:"
+        assert r.blocks[0]["type"] == "table"
+
+    def test_balanced_close_handles_nested_braces(self):
+        # Envelope contains a nested object — extractor must respect depth.
+        content = (
+            "Intro.\n"
+            '{"text":"X","blocks":[{"type":"chart_spec","title":"Y",'
+            '"chart_type":"bar","labels":["a"],'
+            '"series":[{"name":"S","data":[1]}]}]}\n'
+            "Outro."
+        )
+        r = _parse_reply(content)
+        assert len(r.blocks) == 1
+        assert r.text.startswith("Intro.")
+        assert r.text.endswith("Outro.")
+
+    def test_malformed_envelope_with_extra_brace_is_repaired(self):
+        # The exact failure mode from the screenshot: LLM wrote `]}` where
+        # `]]` was expected after the last row, leaving one extra `}`. The
+        # lenient parser deletes the offending char and retries.
+        content = (
+            "And here's the table with how many times you visited each spot:\n"
+            '{"text":"","blocks":[{"type":"table","title":"Dining Breakdown — April 2026",'
+            '"columns":["Merchant","Spent","Visits"],"rows":'
+            '[["Seattle Pacific Table Ten Bellevue","$605.00",8],'
+            '["Fortune Feast Richmond","$188.33",1],'
+            '["Other (16 spots)","$385.58",3]}]}]}\n'
+            "A couple things that stand out: Seattle Pacific Table at $605 is 31%."
+        )
+        r = _parse_reply(content)
+        # The table block was recovered.
+        assert len(r.blocks) == 1
+        assert r.blocks[0]["type"] == "table"
+        assert r.blocks[0]["title"] == "Dining Breakdown — April 2026"
+        assert r.blocks[0]["columns"] == ["Merchant", "Spent", "Visits"]
+        assert len(r.blocks[0]["rows"]) == 3
+        assert r.blocks[0]["rows"][0] == ["Seattle Pacific Table Ten Bellevue", "$605.00", 8]
+        # Prose on either side is preserved; raw JSON is gone.
+        assert "And here's the table" in r.text
+        assert "stand out: Seattle Pacific Table" in r.text
+        assert '"blocks"' not in r.text
+        assert '"rows"' not in r.text
+
+    def test_multiple_envelopes_in_one_reply(self):
+        # Reply contains a chart envelope AND a table envelope. Both should
+        # be extracted into separate blocks; prose stays intact.
+        content = (
+            "Here's the chart:\n"
+            '{"text":"","blocks":[{"type":"chart_spec","title":"April Dining",'
+            '"chart_type":"bar","labels":["A","B"],'
+            '"series":[{"name":"Spent","data":[1,2]}]}]}\n'
+            "And here's the table:\n"
+            '{"text":"","blocks":[{"type":"table","title":"Visits",'
+            '"columns":["X","Y"],"rows":[["a",1],["b",2]]}]}\n'
+            "Anything else?"
+        )
+        r = _parse_reply(content)
+        assert len(r.blocks) == 2
+        assert [b["type"] for b in r.blocks] == ["chart_spec", "table"]
+        assert r.blocks[0]["title"] == "April Dining"
+        assert r.blocks[1]["title"] == "Visits"
+        # Surrounding prose is preserved.
+        assert "Here's the chart" in r.text
+        assert "And here's the table" in r.text
+        assert "Anything else?" in r.text
+        # No raw JSON leaks.
+        assert "chart_spec" not in r.text
+        assert "blocks" not in r.text
+
+    def test_lenient_loader_repairs_misplaced_brace_after_rows(self):
+        from src.chat_agent import _safe_json_loads_lenient
+        # Pattern from the screenshot: one `}` placed where `]` was expected
+        # (closing the rows array). Strict json.loads errors at the bad `}`;
+        # the lenient repair deletes that char and parses successfully.
+        rows_broken = '{"rows":[[1,2],[3,4]}]}'  # extra `}` between row 2 and rows-array close
+        parsed = _safe_json_loads_lenient(rows_broken)
+        assert parsed == {"rows": [[1, 2], [3, 4]]}
+
+    def test_lenient_loader_repairs_trailing_comma(self):
+        from src.chat_agent import _safe_json_loads_lenient
+        parsed = _safe_json_loads_lenient('{"a":[1,2,]}')
+        assert parsed == {"a": [1, 2]}
+
 
 # --- _extract_md_table_block (unit, finer-grained) ---------------------------
 

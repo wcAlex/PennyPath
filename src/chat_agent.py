@@ -22,7 +22,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from src import chat_tools
 from src.llm_orchestrator import _client, _model, _safe_json_loads
@@ -117,6 +117,145 @@ def _build_messages(
     return messages
 
 
+def _find_balanced_close(s: str, start: int) -> Optional[int]:
+    """Return the index of the matching close for the bracket/brace at
+    `start`, tracking BOTH `{}` and `[]` depth. Mismatched closes (e.g. a
+    stray `}` where stack top is `[`) are skipped silently so a single
+    misplaced char from the LLM doesn't terminate the walk early.
+
+    JSON string semantics (quotes + backslash escapes) are respected.
+    None if no matching close is found before end-of-string.
+    """
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+                if not stack:
+                    return i
+            # Mismatched close — skip (LLM may have written `}` where `]`
+            # was expected, or added an extra brace). The candidate text
+            # will still contain the bad char; lenient JSON repair handles it.
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+                if not stack:
+                    return i
+            # Mismatched: same logic as above.
+    return None
+
+
+def _safe_json_loads_lenient(s: str, max_repairs: int = 10) -> Any:
+    """Strict `json.loads`; on failure, delete the offending `}`, `]`, or
+    `,` at the parse-error position and retry. Bounded by `max_repairs`.
+
+    Catches DeepSeek's common shapes: one extra `}` after a row close, a
+    trailing comma, or a stray bracket. Returns None if no repair sequence
+    produces a parseable result.
+    """
+    # Mirror _safe_json_loads's code-fence handling.
+    stripped = s.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[1] if "\n" in stripped else ""
+        if stripped.endswith("```"):
+            stripped = stripped[:-3]
+        stripped = stripped.strip()
+    s = stripped
+
+    for _ in range(max_repairs + 1):
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError as e:
+            pos = e.pos
+            if 0 <= pos < len(s):
+                # Trailing comma: Python errors on the next non-comma char,
+                # not on the comma itself. Delete the comma one step back.
+                if s[pos] in "}]" and pos > 0 and s[pos - 1] == ",":
+                    s = s[:pos - 1] + s[pos:]
+                    continue
+                if s[pos] in "}],":
+                    s = s[:pos] + s[pos + 1:]
+                    continue
+            return None
+        except Exception:
+            return None
+    return None
+
+
+_ENVELOPE_KEY_RE = re.compile(r'\{\s*"(?:text|blocks)"\s*:')
+
+
+def _extract_embedded_envelopes(text: str) -> tuple[str, list[dict]]:
+    """Lift every embedded `{"text": ..., "blocks": [...]}` JSON object out
+    of prose. Handles:
+      - One envelope wrapped in prose (the common case).
+      - Multiple envelopes in one reply (e.g. LLM emits a chart AND a
+        table for "show me in a chart or table").
+      - Malformed envelopes (e.g. an extra `}` after a row close) — strict
+        parse falls through to `_safe_json_loads_lenient`.
+
+    Returns (stripped_text, envelopes_in_order). Envelopes are extracted in
+    forward order; their spans are stripped from the prose with their
+    blocks rendered in the same order by the drawer.
+    """
+    envelopes: list[dict] = []
+    spans: list[tuple[int, int]] = []
+
+    pos = 0
+    while pos < len(text):
+        m = _ENVELOPE_KEY_RE.search(text, pos)
+        if not m:
+            break
+        start = m.start()
+        end = _find_balanced_close(text, start)
+        if end is None:
+            pos = m.end()
+            continue
+        candidate = text[start:end + 1]
+        parsed = _safe_json_loads(candidate)
+        if parsed is None:
+            parsed = _safe_json_loads_lenient(candidate)
+        if isinstance(parsed, dict) and (
+            "blocks" in parsed or isinstance(parsed.get("text"), str)
+        ):
+            envelopes.append(parsed)
+            spans.append((start, end + 1))
+            pos = end + 1
+        else:
+            # Couldn't parse this candidate even with repair — advance past
+            # the regex match and keep looking; the failed segment stays in
+            # the prose (visible as raw JSON, but at least the rest works).
+            pos = m.end()
+
+    if not envelopes:
+        return text, []
+
+    # Splice the original text together with the extracted spans removed.
+    out_parts: list[str] = []
+    cursor = 0
+    for s, e in spans:
+        out_parts.append(text[cursor:s].rstrip())
+        cursor = e
+    out_parts.append(text[cursor:].lstrip())
+    stripped = "\n\n".join(p for p in out_parts if p).strip()
+    return stripped, envelopes
+
+
 # Matches a markdown table: header row, separator row, ≥1 data row.
 _MD_TABLE_RE = re.compile(
     r"(?:^|\n)"
@@ -172,31 +311,65 @@ def _extract_md_table_block(text: str) -> tuple[str, Optional[dict]]:
     return new_text, block
 
 
+def _collect_blocks(envelopes: list[dict]) -> list[dict]:
+    """Flatten the `blocks` from a list of envelopes, filtering to known types."""
+    out: list[dict] = []
+    for env in envelopes:
+        for b in (env.get("blocks") or []):
+            if isinstance(b, dict) and b.get("type") in ("table", "chart_spec"):
+                out.append(b)
+    return out
+
+
 def _parse_reply(content: str) -> ChatReply:
     """Turn LLM output into a ChatReply.
 
     Order of attempts:
-    1. JSON envelope `{"text": str, "blocks": [...]}` — preferred; happens
-       when the LLM followed the prompt instruction.
-    2. Prose with a markdown table — post-process to lift the table into a
+    1. JSON envelope `{"text": str, "blocks": [...]}` as the whole reply —
+       preferred; happens when the LLM followed the prompt instruction.
+    2. One or more JSON envelopes embedded inside prose. Lenient parser
+       repairs common LLM mistakes (extra `}`, trailing `,`). Multiple
+       envelopes — e.g. a chart AND a table in one reply — are all
+       extracted.
+    3. Prose with a markdown table — post-process to lift the table into a
        `table` block (DeepSeek prefers markdown tables; this absorbs that).
-    3. Plain text — pass through unchanged.
+    4. Plain text — pass through unchanged.
     """
     text = (content or "").strip()
     if not text:
         return ChatReply(text="")
+
+    # (1) Whole reply is JSON envelope.
     if text.startswith("{"):
         parsed = _safe_json_loads(text)
-        if isinstance(parsed, dict) and isinstance(parsed.get("text"), str):
-            blocks = parsed.get("blocks") or []
-            if not isinstance(blocks, list):
-                blocks = []
-            blocks = [b for b in blocks if isinstance(b, dict) and b.get("type") in ("table", "chart_spec")]
-            return ChatReply(text=parsed["text"], blocks=blocks)
-    # Markdown-table fallback.
+        if parsed is None:
+            parsed = _safe_json_loads_lenient(text)
+        if isinstance(parsed, dict) and (
+            "blocks" in parsed or isinstance(parsed.get("text"), str)
+        ):
+            blocks = _collect_blocks([parsed])
+            ev_text = parsed.get("text") if isinstance(parsed.get("text"), str) else ""
+            return ChatReply(text=(ev_text or "").strip(), blocks=blocks)
+
+    # (2) Embedded envelope(s) inside prose.
+    stripped_text, envelopes = _extract_embedded_envelopes(text)
+    if envelopes:
+        blocks = _collect_blocks(envelopes)
+        # Prefer the surrounding prose. If there isn't any (envelope-only
+        # reply with prose between envelopes was empty), concatenate the
+        # envelopes' own text fields.
+        final_text = stripped_text
+        if not final_text:
+            ev_texts = [str(e.get("text") or "").strip() for e in envelopes]
+            final_text = " ".join(t for t in ev_texts if t).strip()
+        return ChatReply(text=final_text, blocks=blocks)
+
+    # (3) Markdown-table fallback.
     stripped_text, md_block = _extract_md_table_block(text)
     if md_block:
         return ChatReply(text=stripped_text, blocks=[md_block])
+
+    # (4) Plain text.
     return ChatReply(text=text)
 
 
