@@ -71,11 +71,13 @@ def cmd_chat(args):
         if user_input.lower() in ("quit", "exit"):
             break
         try:
-            response = companion.chat(user_input, transactions)
+            reply = companion.chat(user_input, transactions)
         except Exception as e:
             print(f"Something went wrong: {e}")
             continue
-        print(response)
+        print(reply.text)
+        for block in reply.blocks:
+            print(f"  [attached {block.get('type')}: {block.get('title', '')}]")
     print("Take care!")
 
 

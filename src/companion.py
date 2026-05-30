@@ -1,8 +1,9 @@
 import json
 import os
 import re
-from typing import List
+from typing import List, Optional
 
+from src.chat_agent import ChatAgent, ChatReply
 from src.models import Transaction
 from src.llm_orchestrator import generate_checkin, answer_question, generate_monthly_analysis
 from src.storage import ConversationStore, WikiStore, UserConfigStore
@@ -119,7 +120,15 @@ class Companion:
         transactions: List[Transaction],
         image_b64: str = None,
         mime_type: str = "image/jpeg",
-    ) -> str:
+        chart_context: Optional[dict] = None,
+        user_id: Optional[str] = None,
+    ) -> ChatReply:
+        """Single user turn. Always returns a ChatReply.
+
+        - `question` intent → routes to ChatAgent.run() (tool-using loop, may
+          attach `blocks`).
+        - other intents → existing handlers, wrapped in a text-only ChatReply.
+        """
         self.history.append({"role": "user", "content": user_message})
         ConversationStore.append("user", user_message, session_id=self.session_id)
         self.session_turns.append({"role": "user", "content": user_message})
@@ -127,25 +136,34 @@ class Companion:
         intent = _detect_intent(user_message)
         prefs = _load_prefs()
 
+        reply: ChatReply
         if intent == "checkin":
-            response = generate_checkin(transactions, prefs, wiki=self.wiki)
+            reply = ChatReply(text=generate_checkin(transactions, prefs, wiki=self.wiki))
         elif intent == "set_goal":
-            response = self._handle_set_goal(user_message, prefs)
+            reply = ChatReply(text=self._handle_set_goal(user_message, prefs))
         elif intent == "show_goals":
-            response = self._handle_show_goals(prefs)
+            reply = ChatReply(text=self._handle_show_goals(prefs))
         elif intent == "monthly_analysis":
-            response = generate_monthly_analysis(transactions, prefs, wiki=self.wiki)
+            reply = ChatReply(text=generate_monthly_analysis(transactions, prefs, wiki=self.wiki))
         else:
-            response = answer_question(
-                user_message, transactions, self.history, prefs,
-                image_b64=image_b64, mime_type=mime_type, wiki=self.wiki,
+            # Phase 1C drill-down. The ChatAgent does its own tool-using LLM
+            # loop against the reconciled view, so we hand it `user_id` and
+            # the dashboard `chart_context` directly. `transactions` is not
+            # used here — the tools query the DB.
+            reply = ChatAgent().run(
+                user_id=user_id or "default",
+                user_message=user_message,
+                history=self.history,
+                chart_context=chart_context,
+                wiki_text=self.wiki or "",
             )
 
-        self.history.append({"role": "assistant", "content": response})
+        # Persist only the text — blocks are render-time concerns, not history.
+        self.history.append({"role": "assistant", "content": reply.text})
         self.history = self.history[-(MAX_TURNS * 2):]
-        ConversationStore.append("assistant", response, session_id=self.session_id)
-        self.session_turns.append({"role": "assistant", "content": response})
-        return response
+        ConversationStore.append("assistant", reply.text, session_id=self.session_id)
+        self.session_turns.append({"role": "assistant", "content": reply.text})
+        return reply
 
     def _handle_set_goal(self, user_message: str, prefs: dict) -> str:
         label, amount = _parse_goal(user_message)

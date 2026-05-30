@@ -433,11 +433,14 @@ async def monthly_analysis():
 
 @app.post("/chat")
 async def chat_endpoint(
+    request: Request,
     message: str = Form(""),
     image: Optional[UploadFile] = File(None),
+    chart_context: Optional[str] = Form(None),
 ):
     from src.companion import Companion
     from src.statement_ingester import ingest_statements
+    import json as _json
 
     transactions = []
     try:
@@ -452,13 +455,101 @@ async def chat_endpoint(
         image_b64 = base64.b64encode(data).decode()
         mime_type = image.content_type or "image/jpeg"
 
+    # Parse chart_context (sent as a JSON string in the form body). Tolerate
+    # an absent or malformed value — drop it rather than 400, so an older
+    # client that doesn't send it still works.
+    ctx: Optional[dict] = None
+    if chart_context:
+        try:
+            parsed = _json.loads(chart_context)
+            if isinstance(parsed, dict):
+                ctx = parsed
+        except (ValueError, TypeError):
+            ctx = None
+
     try:
         companion = Companion()
-        response = companion.chat(message, transactions, image_b64=image_b64, mime_type=mime_type)
+        reply = companion.chat(
+            message,
+            transactions,
+            image_b64=image_b64,
+            mime_type=mime_type,
+            chart_context=ctx,
+            user_id=_resolve_user_id(),
+        )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-    return JSONResponse({"response": response})
+    # Keep `response` for backward compat (the existing chat.html and tests
+    # read `data.response`). New clients should read `text` and `blocks`.
+    body: dict = {"response": reply.text, "text": reply.text}
+    if reply.blocks:
+        body["blocks"] = reply.blocks
+    return JSONResponse(body)
+
+
+@app.post("/chat/debug")
+async def chat_debug(
+    message: str = Form(""),
+    chart_context: Optional[str] = Form(None),
+):
+    """Run one chat turn through the agent loop and return the full trace.
+
+    Returns `{reply, trace}` where `trace.iterations[*]` carries each LLM
+    request's full message list, the response, and any tool calls/results
+    with timing. Use this to see exactly what the LLM was sent and what it
+    returned. Same env gate as `/chat/tools` — disabled when
+    `PENNYPATH_DISABLE_DEV_ENDPOINTS=1`. Not an external API.
+
+    Bypasses `Companion` routing and calls `ChatAgent` directly because the
+    purpose is to debug the agent, not the intent dispatch.
+    """
+    if os.getenv("PENNYPATH_DISABLE_DEV_ENDPOINTS") == "1":
+        raise HTTPException(status_code=404, detail="not found")
+
+    from src.chat_agent import ChatAgent
+    from src.storage import ConversationStore, WikiStore
+    import json as _json
+
+    ctx: Optional[dict] = None
+    if chart_context:
+        try:
+            parsed = _json.loads(chart_context)
+            if isinstance(parsed, dict):
+                ctx = parsed
+        except (ValueError, TypeError):
+            ctx = None
+
+    trace: dict = {}
+    history = ConversationStore.load(max_turns=12)
+    wiki_text = WikiStore.load() if WikiStore.exists() else ""
+    reply = ChatAgent().run(
+        user_id=_resolve_user_id(),
+        user_message=message,
+        history=history,
+        chart_context=ctx,
+        wiki_text=wiki_text,
+        trace=trace,
+    )
+    return JSONResponse({
+        "reply": {"text": reply.text, "blocks": reply.blocks},
+        "trace": trace,
+    })
+
+
+@app.get("/chat/tools")
+async def chat_tools_debug():
+    """Local debug snapshot of the in-process tool registry.
+
+    Default-on for local dev; opt-out for prod by setting
+    `PENNYPATH_DISABLE_DEV_ENDPOINTS=1`. The backend is already bound to
+    127.0.0.1 by default; this env flag is the belt to that suspenders for
+    any deploy that puts the app behind a reverse proxy. Not an external API.
+    """
+    if os.getenv("PENNYPATH_DISABLE_DEV_ENDPOINTS") == "1":
+        raise HTTPException(status_code=404, detail="not found")
+    from src.chat_tools import list_tools_for_debug
+    return JSONResponse(list_tools_for_debug())
 
 
 @app.get("/model")

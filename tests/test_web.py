@@ -75,11 +75,40 @@ class TestChatEndpoint:
         # The /chat route calls ingest_statements() before chatting; mock it so
         # the test doesn't re-parse real PDFs through the live LLM (which made
         # this case hang for ~17 min). We're unit-testing the route, not ingest.
+        # Companion.chat now returns a ChatReply (Phase 1C).
+        from src.chat_agent import ChatReply
         with patch("src.statement_ingester.ingest_statements", return_value=[]), \
-             patch("src.companion.Companion.chat", return_value="Hey!"):
+             patch("src.companion.Companion.chat", return_value=ChatReply(text="Hey!")):
             resp = client.post("/chat", data={"message": "hello"})
         assert resp.status_code == 200
-        assert resp.json() == {"response": "Hey!"}
+        body = resp.json()
+        assert body["response"] == "Hey!"
+        assert body["text"] == "Hey!"
+        assert "blocks" not in body  # empty blocks list is omitted
+
+    def test_post_chat_with_blocks(self):
+        from src.chat_agent import ChatReply
+        reply = ChatReply(text="Top spots:", blocks=[{
+            "type": "table",
+            "title": "X",
+            "columns": ["a"],
+            "rows": [["b"]],
+        }])
+        with patch("src.statement_ingester.ingest_statements", return_value=[]), \
+             patch("src.companion.Companion.chat", return_value=reply):
+            resp = client.post("/chat", data={"message": "break down dining"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["text"] == "Top spots:"
+        assert body["blocks"][0]["type"] == "table"
+
+    def test_chat_tools_debug_endpoint(self):
+        resp = client.get("/chat/tools")
+        assert resp.status_code == 200
+        names = [t["name"] for t in resp.json()["tools"]]
+        assert "query_spending_breakdown" in names
+        assert "category_trend" in names
+        assert len(names) == 9
 
 
 class TestDeleteMemory:

@@ -6,7 +6,7 @@
     top: 52px;
     right: 0;
     bottom: 0;
-    width: 380px;
+    width: var(--chat-drawer-width, 380px);
     background: white;
     border-left: 1px solid #e5e7eb;
     box-shadow: -4px 0 16px rgba(0,0,0,0.06);
@@ -14,6 +14,40 @@
     flex-direction: column;
   }
   #chat-drawer.open { display: flex; }
+  /* Suppress transitions while the user is dragging the resize handle. */
+  body.chat-resizing,
+  body.chat-resizing * { user-select: none !important; cursor: ew-resize !important; }
+
+  /* Drag handle pinned to the drawer's left edge. Hairline by default;
+     fattens on hover so it's clearly grabbable without stealing layout. */
+  #chat-drawer-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 6px;
+    cursor: ew-resize;
+    background: transparent;
+    z-index: 1;
+    transition: background 0.12s;
+  }
+  #chat-drawer-resize::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 1px;
+    width: 3px;
+    height: 36px;
+    border-radius: 2px;
+    background: #d1d5db;
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  #chat-drawer-resize:hover { background: rgba(79,70,229,0.08); }
+  #chat-drawer-resize:hover::after { opacity: 1; background: #4f46e5; }
+  body.chat-resizing #chat-drawer-resize { background: rgba(79,70,229,0.12); }
+  body.chat-resizing #chat-drawer-resize::after { opacity: 1; background: #4f46e5; }
 
   #chat-drawer-header {
     display: flex;
@@ -134,6 +168,65 @@
     max-height: 140px;
     border-radius: 8px;
     margin-top: 6px;
+  }
+
+  /* Inline blocks that the agent attaches under an assistant message:
+     either a compact table or a small Chart.js canvas. Width follows the
+     bubble so a long table scrolls horizontally instead of breaking layout. */
+  #chat-drawer .msg.assistant .block {
+    margin-top: 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: white;
+    overflow: hidden;
+  }
+  #chat-drawer .msg.assistant .block-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 8px 10px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fafbff;
+  }
+  #chat-drawer .msg.assistant .block-table-wrap {
+    overflow-x: auto;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  #chat-drawer .msg.assistant table.block-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  #chat-drawer .msg.assistant table.block-table th,
+  #chat-drawer .msg.assistant table.block-table td {
+    padding: 6px 10px;
+    text-align: left;
+  }
+  #chat-drawer .msg.assistant table.block-table th {
+    color: #6b7280;
+    font-weight: 500;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fafbff;
+  }
+  #chat-drawer .msg.assistant table.block-table td {
+    border-bottom: 1px solid #f3f4f6;
+  }
+  #chat-drawer .msg.assistant table.block-table tr:last-child td { border-bottom: none; }
+  #chat-drawer .msg.assistant table.block-table td:not(:first-child),
+  #chat-drawer .msg.assistant table.block-table th:not(:first-child) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  #chat-drawer .msg.assistant .block-chart {
+    padding: 8px;
+    height: 180px;
+    position: relative;
+  }
+  #chat-drawer .msg.assistant .block-chart canvas {
+    max-height: 164px !important;
   }
 
   #chat-drawer .typing {
@@ -298,14 +391,18 @@
   @media (max-width: 768px) {
     #chat-drawer {
       top: 52px;
-      width: 100vw;
+      width: 100vw !important;     /* override custom width on phone */
       left: 0;
       right: 0;
     }
+    #chat-drawer-resize { display: none; }
   }
 </style>
 
 <aside id="chat-drawer" aria-label="Companion chat">
+  <div id="chat-drawer-resize" role="separator" aria-orientation="vertical"
+       aria-label="Resize chat" title="Drag to resize"
+       onmousedown="drawerResizeStart(event)"></div>
   <div id="chat-drawer-header">
     <button class="resume-btn" type="button" onclick="toggleResumeList()" title="Resume a previous conversation">
       Resume previous conversation ▾
@@ -356,6 +453,73 @@
 
 <script>
   // Drawer is initialised from localStorage by dashboard.html on DOMContentLoaded.
+
+  // ── Resize handle ──────────────────────────────────────
+  // Drag the left edge to widen the drawer. Width persists per browser via
+  // localStorage. Bounded between 320px and min(70vw, 900px) so it never
+  // takes the whole viewport or shrinks below a usable line length.
+
+  const CHAT_DRAWER_MIN_WIDTH = 320;
+  function chatDrawerMaxWidth() {
+    return Math.min(window.innerWidth - 80, 900);
+  }
+  function clampDrawerWidth(px) {
+    return Math.max(CHAT_DRAWER_MIN_WIDTH, Math.min(chatDrawerMaxWidth(), px));
+  }
+  function applyDrawerWidth(px) {
+    document.documentElement.style.setProperty('--chat-drawer-width', px + 'px');
+  }
+  function getDrawerWidth() {
+    const drawer = document.getElementById('chat-drawer');
+    if (!drawer) return 380;
+    return drawer.getBoundingClientRect().width || 380;
+  }
+
+  // Restore on first script execution (runs before openChatDrawer fires).
+  (function restoreDrawerWidth() {
+    try {
+      const stored = parseInt(localStorage.getItem('chatDrawerWidth') || '', 10);
+      if (Number.isFinite(stored) && stored > 0) applyDrawerWidth(clampDrawerWidth(stored));
+    } catch (e) { /* ignore */ }
+  })();
+
+  let _resizeStartX = 0;
+  let _resizeStartW = 0;
+
+  function drawerResizeStart(ev) {
+    ev.preventDefault();
+    _resizeStartX = ev.clientX;
+    _resizeStartW = getDrawerWidth();
+    document.body.classList.add('chat-resizing');
+    window.addEventListener('mousemove', drawerResizeMove);
+    window.addEventListener('mouseup', drawerResizeEnd, { once: true });
+  }
+
+  function drawerResizeMove(ev) {
+    // Drawer is anchored to right; growing left means clientX moved left.
+    const delta = _resizeStartX - ev.clientX;
+    applyDrawerWidth(clampDrawerWidth(_resizeStartW + delta));
+  }
+
+  function drawerResizeEnd() {
+    document.body.classList.remove('chat-resizing');
+    window.removeEventListener('mousemove', drawerResizeMove);
+    try {
+      localStorage.setItem('chatDrawerWidth', String(Math.round(getDrawerWidth())));
+    } catch (e) { /* ignore */ }
+    // Nudge Chart.js instances inside drawer blocks so they resize to the
+    // new width. The Chart.resize() API doesn't have a registry hook; we
+    // ping window.dispatchEvent so any responsive chart picks it up.
+    try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+  }
+
+  // Re-clamp on viewport resize so a saved width doesn't exceed the new
+  // max (e.g. user resized the browser window narrower).
+  window.addEventListener('resize', () => {
+    const current = getDrawerWidth();
+    const clamped = clampDrawerWidth(current);
+    if (clamped !== current) applyDrawerWidth(clamped);
+  });
 
   function openChatDrawer() {
     document.getElementById('chat-drawer').classList.add('open');
@@ -426,7 +590,7 @@
     if (el) el.scrollTop = el.scrollHeight;
   }
 
-  function drawerAddMessage(role, text, imageSrc) {
+  function drawerAddMessage(role, text, imageSrc, blocks) {
     const messages = document.getElementById('chat-drawer-messages');
     const div = document.createElement('div');
     div.className = 'msg ' + role;
@@ -443,9 +607,144 @@
         div.appendChild(img);
       }
     }
+    if (role === 'assistant' && Array.isArray(blocks)) {
+      for (const block of blocks) {
+        const el = renderBlock(block);
+        if (el) div.appendChild(el);
+      }
+    }
     messages.appendChild(div);
     drawerScrollToBottom();
     return div;
+  }
+
+  // ── Block rendering ────────────────────────────────────
+  // The agent attaches at most one block per reply. We render `table` as a
+  // compact HTML table and `chart_spec` as a small Chart.js canvas using the
+  // shared CATEGORY_PALETTE (loaded via _chart_palette.html on dashboard
+  // pages; falls back to a single indigo color elsewhere).
+
+  function renderBlock(block) {
+    if (!block || typeof block !== 'object') return null;
+    if (block.type === 'table') return renderTableBlock(block);
+    if (block.type === 'chart_spec') return renderChartBlock(block);
+    return null;
+  }
+
+  function renderTableBlock(block) {
+    const wrap = document.createElement('div');
+    wrap.className = 'block';
+    if (block.title) {
+      const t = document.createElement('div');
+      t.className = 'block-title';
+      t.textContent = block.title;
+      wrap.appendChild(t);
+    }
+    const scroll = document.createElement('div');
+    scroll.className = 'block-table-wrap';
+    const tbl = document.createElement('table');
+    tbl.className = 'block-table';
+    if (Array.isArray(block.columns) && block.columns.length) {
+      const thead = document.createElement('thead');
+      const tr = document.createElement('tr');
+      for (const col of block.columns) {
+        const th = document.createElement('th');
+        th.textContent = String(col);
+        tr.appendChild(th);
+      }
+      thead.appendChild(tr);
+      tbl.appendChild(thead);
+    }
+    const tbody = document.createElement('tbody');
+    for (const row of (block.rows || [])) {
+      const tr = document.createElement('tr');
+      for (const cell of row) {
+        const td = document.createElement('td');
+        td.textContent = cell == null ? '' : String(cell);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    scroll.appendChild(tbl);
+    wrap.appendChild(scroll);
+    return wrap;
+  }
+
+  function renderChartBlock(block) {
+    if (typeof Chart === 'undefined') {
+      // Chart.js not loaded on this page — degrade to a labeled table.
+      return renderTableBlock({
+        title: block.title,
+        columns: ['Label', ...(block.series || []).map(s => s.name || 'Value')],
+        rows: (block.labels || []).map((lab, i) => [
+          lab, ...((block.series || []).map(s => (s.data || [])[i] ?? ''))
+        ]),
+      });
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'block';
+    if (block.title) {
+      const t = document.createElement('div');
+      t.className = 'block-title';
+      t.textContent = block.title;
+      wrap.appendChild(t);
+    }
+    const chartHolder = document.createElement('div');
+    chartHolder.className = 'block-chart';
+    const canvas = document.createElement('canvas');
+    chartHolder.appendChild(canvas);
+    wrap.appendChild(chartHolder);
+
+    const palette = window.CATEGORY_PALETTE || ['#4f46e5'];
+    const series = Array.isArray(block.series) ? block.series : [];
+    const type = ['bar','line','doughnut'].includes(block.chart_type) ? block.chart_type : 'bar';
+
+    let datasets;
+    if (type === 'doughnut') {
+      datasets = [{
+        data: series[0] ? (series[0].data || []) : [],
+        backgroundColor: (block.labels || []).map((_, i) =>
+          (window.donutColor ? window.donutColor(i) : palette[i % palette.length])),
+        borderWidth: 0,
+      }];
+    } else {
+      datasets = series.map((s, idx) => ({
+        label: s.name || `Series ${idx+1}`,
+        data: s.data || [],
+        backgroundColor: type === 'bar' ? palette[idx % palette.length] : 'rgba(79,70,229,0.18)',
+        borderColor: palette[idx % palette.length],
+        borderWidth: type === 'line' ? 2 : 0,
+        fill: type === 'line',
+        tension: type === 'line' ? 0.3 : 0,
+      }));
+    }
+
+    // Defer until the canvas is in the DOM so Chart.js can size correctly.
+    setTimeout(() => {
+      try {
+        new Chart(canvas.getContext('2d'), {
+          type,
+          data: { labels: block.labels || [], datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: type !== 'doughnut' && series.length > 1, position: 'bottom',
+                        labels: { boxWidth: 10, font: { size: 11 } } },
+              tooltip: { enabled: true },
+            },
+            scales: (type === 'doughnut') ? {} : {
+              y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+              x: { ticks: { font: { size: 10 } } },
+            },
+            cutout: type === 'doughnut' ? '60%' : undefined,
+          },
+        });
+      } catch (e) { /* swallow — block stays as title-only */ }
+    }, 0);
+
+    return wrap;
   }
 
   function drawerAddTyping() {
@@ -480,8 +779,17 @@
     const formData = new FormData();
     formData.append('message', text);
     if (drawerSelectedFile) formData.append('image', drawerSelectedFile);
-    drawerRemoveImage();
 
+    // Tell the agent what the user is currently looking at on the dashboard.
+    // Falls through cleanly when the helper isn't defined (e.g. chat opened
+    // from a non-dashboard page) — the agent then asks for scope itself.
+    try {
+      const ctx = (typeof window.getChartContext === 'function')
+        ? window.getChartContext() : null;
+      if (ctx) formData.append('chart_context', JSON.stringify(ctx));
+    } catch (e) { /* ignore */ }
+
+    drawerRemoveImage();
     drawerAddTyping();
 
     try {
@@ -491,7 +799,9 @@
       if (data.error) {
         drawerAddMessage('assistant', '⚠️ ' + data.error);
       } else {
-        drawerAddMessage('assistant', data.response || '');
+        // New shape: {text, blocks?}. Old shape: {response}. Support both.
+        const replyText = data.text || data.response || '';
+        drawerAddMessage('assistant', replyText, null, data.blocks);
       }
     } catch (err) {
       drawerRemoveTyping();

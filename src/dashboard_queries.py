@@ -13,6 +13,7 @@ See design/ui_dashboard.md §3 and design/storage.md → Reconciliation layer.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import statistics
 from datetime import date, datetime, timedelta
@@ -678,6 +679,199 @@ def parse_period(
     raise ValueError(f"Unrecognized period: {period!r}")
 
 
+# --- Chat-agent helpers (Phase 1C) -------------------------------------------
+#
+# The three helpers below back chat tools (`category_trend`, `top_merchants`,
+# `compare_periods`). They read the same reconciled view and reuse the same
+# exclusion rules as the dashboard, so chat numbers match the dashboard.
+
+
+def category_trend(
+    user_id: str,
+    category: str,
+    months: int = 12,
+    account_id: Optional[str] = None,
+    flow: str = "spending",
+    *,
+    today: Optional[date] = None,
+) -> dict:
+    """Monthly totals for one category over the last `months` months ending today.
+
+    `category` matches case-insensitively. `flow` is "spending" or "income".
+    Excludes internal transfers and duplicates.
+    """
+    flow = flow.lower()
+    if flow not in ("spending", "income"):
+        raise ValueError("flow must be 'spending' or 'income'")
+    if months < 1:
+        months = 1
+    cat_lc = (category or "").lower()
+    today = today or date.today()
+    keys = _months_back(today, months)
+    if not keys:
+        return {"months": [], "amounts": [], "avg": 0.0, "peak": None, "trough": None}
+
+    start = _parse_iso(keys[0] + "-01")
+    end = _month_last(_parse_iso(keys[-1] + "-01"))
+    rows = list_transactions_signed(user_id, start, end, account_id)
+    per_month: dict[str, Decimal] = {m: Decimal("0") for m in keys}
+    for r in rows:
+        if r["flow_type"] != flow:
+            continue
+        if r["is_paired_transfer"] or r["is_duplicate"]:
+            continue
+        if (r["category"] or "").lower() != cat_lc:
+            continue
+        mk = _month_key(r["date"])
+        if mk in per_month:
+            per_month[mk] += Decimal(str(r["amount"]))
+
+    amounts = [_to_f(per_month[m]) for m in keys]
+    nonzero_pairs = [(m, a) for m, a in zip(keys, amounts) if a > 0]
+    peak = max(nonzero_pairs, key=lambda p: p[1]) if nonzero_pairs else None
+    trough = min(nonzero_pairs, key=lambda p: p[1]) if nonzero_pairs else None
+    avg = sum(amounts) / max(len(amounts), 1)
+    return {
+        "months": keys,
+        "amounts": amounts,
+        "avg": avg,
+        "peak": {"month": peak[0], "amount": peak[1]} if peak else None,
+        "trough": {"month": trough[0], "amount": trough[1]} if trough else None,
+    }
+
+
+# Patterns we strip before grouping merchants. The descriptor field on bank
+# statements is noisy: store IDs, locations, and processor prefixes vary by
+# bank but the underlying merchant string is usually stable up to one of these
+# tokens.
+_MERCHANT_PREFIXES = re.compile(
+    r"^(?:tst\*|sq\s*\*|sp\s*\*|paypal\s*\*|venmo\s*\*|amzn\s*mktp\s*\*?)\s*",
+    re.IGNORECASE,
+)
+_MERCHANT_TRAIL = re.compile(
+    r"(?:"
+    r"\s+#\s*\d+.*$"                # "#12345 ..."
+    r"|\s+\d{3,}\s+[A-Z]{2}\s*$"    # "12345 NY"
+    r"|\s+[A-Z]{2}\s*$"             # trailing state code
+    r"|\s+\d{5}(?:-\d{4})?\s*$"     # trailing zip
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _canonical_merchant(desc: str) -> str:
+    """Best-effort merchant canonicalization. Lowercased, stripped of common
+    processor prefixes and trailing location/store tokens, then title-cased.
+    Conservative — if a description doesn't match any pattern, it falls through
+    unchanged (only case-normalized).
+    """
+    s = (desc or "").strip()
+    if not s:
+        return ""
+    s = _MERCHANT_PREFIXES.sub("", s)
+    # Strip up to two trailing tokens (zip after state, e.g.).
+    for _ in range(2):
+        new = _MERCHANT_TRAIL.sub("", s)
+        if new == s:
+            break
+        s = new.strip()
+    # Collapse whitespace.
+    s = " ".join(s.split())
+    # Title-case for readability, but keep already-capitalized acronyms intact.
+    return s.title() if s.islower() or s.isupper() else s
+
+
+def top_merchants(
+    user_id: str,
+    start: date,
+    end: date,
+    category: Optional[str] = None,
+    account_id: Optional[str] = None,
+    limit: int = 10,
+) -> list[dict]:
+    """Top N merchants by total spend in the window. Excludes transfers/dupes."""
+    if limit < 1:
+        limit = 1
+    cat_lc = category.lower() if category else None
+    rows = list_transactions_signed(user_id, start, end, account_id)
+    by_merchant: dict[str, dict] = {}
+    for r in rows:
+        if r["flow_type"] != "spending":
+            continue
+        if r["is_paired_transfer"] or r["is_duplicate"]:
+            continue
+        if cat_lc and (r["category"] or "").lower() != cat_lc:
+            continue
+        name = _canonical_merchant(r["description"]) or "Unknown"
+        bucket = by_merchant.setdefault(name, {"name": name, "total": Decimal("0"),
+                                                "visits": 0, "last_seen": ""})
+        bucket["total"] += Decimal(str(r["amount"]))
+        bucket["visits"] += 1
+        if r["date"] > bucket["last_seen"]:
+            bucket["last_seen"] = r["date"]
+    out = sorted(by_merchant.values(), key=lambda b: b["total"], reverse=True)[:limit]
+    return [{"name": b["name"], "total": _to_f(b["total"]),
+             "visits": b["visits"], "last_seen": b["last_seen"]} for b in out]
+
+
+def compare_periods(
+    user_id: str,
+    period_a_start: date,
+    period_a_end: date,
+    period_b_start: date,
+    period_b_end: date,
+    category: Optional[str] = None,
+    account_id: Optional[str] = None,
+    mover_dim: str = "category",
+) -> dict:
+    """Compare spending in two periods. Returns totals + top movers."""
+    mover_dim = mover_dim.lower()
+    if mover_dim not in ("category", "merchant"):
+        raise ValueError("mover_dim must be 'category' or 'merchant'")
+    cat_lc = category.lower() if category else None
+
+    def _bucket(start: date, end: date) -> tuple[Decimal, dict[str, Decimal]]:
+        rows = list_transactions_signed(user_id, start, end, account_id)
+        total = Decimal("0")
+        by_key: dict[str, Decimal] = {}
+        for r in rows:
+            if r["flow_type"] != "spending":
+                continue
+            if r["is_paired_transfer"] or r["is_duplicate"]:
+                continue
+            if cat_lc and (r["category"] or "").lower() != cat_lc:
+                continue
+            amt = Decimal(str(r["amount"]))
+            total += amt
+            key = (r["category"] or "Uncategorized") if mover_dim == "category" \
+                else (_canonical_merchant(r["description"]) or "Unknown")
+            by_key[key] = by_key.get(key, Decimal("0")) + amt
+        return total, by_key
+
+    total_a, by_a = _bucket(period_a_start, period_a_end)
+    total_b, by_b = _bucket(period_b_start, period_b_end)
+
+    keys = set(by_a) | set(by_b)
+    movers = []
+    for k in keys:
+        a = float(by_a.get(k, Decimal("0")))
+        b = float(by_b.get(k, Decimal("0")))
+        movers.append({"label": k, "a": a, "b": b, "delta": b - a})
+    movers.sort(key=lambda m: abs(m["delta"]), reverse=True)
+    top_movers = movers[:8]
+
+    delta = float(total_b - total_a)
+    pct = (delta / float(total_a) * 100.0) if total_a > 0 else None
+
+    return {
+        "period_a": {"start": _iso(period_a_start), "end": _iso(period_a_end), "total": _to_f(total_a)},
+        "period_b": {"start": _iso(period_b_start), "end": _iso(period_b_end), "total": _to_f(total_b)},
+        "delta": delta,
+        "delta_pct": pct,
+        "top_movers": top_movers,
+    }
+
+
 __all__ = [
     "FIXED_COV_THRESHOLD",
     "FIXED_MIN_MONTHS",
@@ -689,4 +883,7 @@ __all__ = [
     "fixed_vs_flexible",
     "list_transactions_signed",
     "parse_period",
+    "category_trend",
+    "top_merchants",
+    "compare_periods",
 ]

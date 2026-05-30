@@ -1,0 +1,24 @@
+{# Shared chart palette + donutColor helper.
+
+   Both the dashboard donuts and the chat drawer's inline mini-charts use
+   these. Keep this partial as the single source of truth so the dashboard
+   and a chat-emitted chart stay visually consistent.
+
+   - First 10 slices: hand-picked, harmonious, no pure red (finance-friendly).
+   - Beyond 10: golden-angle HSL (137.5°) so any number of slices stays
+     visually distinct without wrapping/repeating.
+#}
+<script>
+  window.CATEGORY_PALETTE = window.CATEGORY_PALETTE || [
+    '#4f46e5','#06b6d4','#f59e0b','#ec4899','#10b981',
+    '#f97316','#8b5cf6','#0ea5e9','#84cc16','#64748b'
+  ];
+
+  if (typeof window.donutColor !== 'function') {
+    window.donutColor = function(i) {
+      if (i < window.CATEGORY_PALETTE.length) return window.CATEGORY_PALETTE[i];
+      const hue = Math.round((i * 137.508) % 360);
+      return 'hsl(' + hue + ', 68%, 55%)';
+    };
+  }
+</script>

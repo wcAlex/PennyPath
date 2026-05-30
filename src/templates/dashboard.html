@@ -714,6 +714,7 @@
 
 </main>
 
+{% include "_chart_palette.html" %}
 {% include "_chat_drawer.html" %}
 
 <script>
@@ -915,6 +916,55 @@
     }
   }
 
+  // ── Chart context for chat drawer ──────────────────────
+  // The drawer sends this with every /chat POST so "break that down" knows
+  // which period and category the user is currently looking at. See
+  // design/chat_agent.md §7.
+
+  function periodTriple() {
+    // Resolve APP_STATE's period/start/end into a {start, end, label} triple
+    // that matches the dashboard's visible period exactly. Mirrors the
+    // backend's parse_period in src/dashboard_queries.py.
+    if (APP_STATE.start && APP_STATE.end) {
+      return { start: APP_STATE.start, end: APP_STATE.end,
+                label: `${APP_STATE.start} → ${APP_STATE.end}` };
+    }
+    const p = APP_STATE.period || defaultPeriodFor(APP_STATE.tab);
+    const today = new Date();
+    const iso = d => d.toISOString().slice(0, 10);
+    if (p === 'ytd') {
+      const start = `${today.getFullYear()}-01-01`;
+      return { start, end: iso(today), label: 'Year to date' };
+    }
+    if (p === 'last-12mo') {
+      const start = new Date(today.getFullYear(), today.getMonth() - 11, 1);
+      return { start: iso(start), end: iso(today), label: 'Last 12 months' };
+    }
+    const m = String(p || '').match(/^(\d{4})-(\d{2})$/);
+    if (m) {
+      const y = Number(m[1]), mo = Number(m[2]);
+      const start = `${y}-${String(mo).padStart(2,'0')}-01`;
+      const endD = new Date(y, mo, 0);  // day 0 of next month = last of this
+      const end = iso(endD);
+      const label = endD.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      return { start, end, label };
+    }
+    return null;
+  }
+
+  window.getChartContext = function () {
+    const tab = APP_STATE.tab;
+    if (tab === 'pinned') return null;
+    const ctx = {
+      chart_key: tab,
+      period: periodTriple(),
+      selected_category: APP_STATE.category || null,
+      selected_account_id: APP_STATE.account || null,
+      summary_numbers: (window.dashboardSummary && window.dashboardSummary[tab]) || null,
+    };
+    return ctx;
+  };
+
   // ── Period → query string for backend ──────────────────
 
   function periodQueryString() {
@@ -959,23 +1009,11 @@
   }
 
   // ── Palette for donut slices ──────────────────────────
-  // Distinct categorical hues (not opacity steps of one color) so adjacent
-  // slices are easy to tell apart. Indigo stays first to anchor the brand;
-  // slate is last for the collapsed "Other" / Uncategorized bucket. No pure
-  // red — that reads as "alarm" on a finance surface.
-  const CATEGORY_PALETTE = ['#4f46e5','#06b6d4','#f59e0b','#ec4899','#10b981','#f97316','#8b5cf6','#0ea5e9','#84cc16','#64748b'];
-
-  // Color for slice i. We don't know the category count ahead of time, so this
-  // is NOT a fixed list that wraps around (which would repeat colors). For the
-  // first 10 we use the hand-picked palette above; beyond that we generate hues
-  // spaced by the golden angle (137.5°), which keeps any number of slices
-  // visually distinct. Donuts also collapse their tail into "Other" (≤8 slices),
-  // so in practice the curated palette is all that ever shows.
-  function donutColor(i) {
-    if (i < CATEGORY_PALETTE.length) return CATEGORY_PALETTE[i];
-    const hue = Math.round((i * 137.508) % 360);
-    return `hsl(${hue}, 68%, 55%)`;
-  }
+  // CATEGORY_PALETTE and donutColor(i) come from _chart_palette.html so the
+  // dashboard and any inline mini-chart the chat drawer emits stay visually
+  // consistent. Alias them as locals for the existing call sites.
+  const CATEGORY_PALETTE = window.CATEGORY_PALETTE;
+  const donutColor = window.donutColor;
 
   // ── Spending tab ──────────────────────────────────────
 
@@ -1007,6 +1045,13 @@
       donutCats = [...head, { name: 'Other', amount: tailTotal }];
     }
     drawSpendingDonut(donutCats);
+
+    // Capture a small summary so the chat drawer can send it as chart_context.
+    window.dashboardSummary = window.dashboardSummary || {};
+    window.dashboardSummary.spending = {
+      total_spend: total,
+      top_5: cats.slice(0, 5).map(c => ({ name: c.name, amount: Number(c.amount || 0) })),
+    };
 
     // Breakdown table
     const tbody = document.getElementById('spending-breakdown-body');
@@ -1091,6 +1136,13 @@
     }
     drawIncomeDonut(subs);
     drawIncomeHistory(data.monthly_history || [], data.avg_monthly || 0);
+
+    window.dashboardSummary = window.dashboardSummary || {};
+    window.dashboardSummary.income = {
+      total_income: total,
+      avg_monthly: data.avg_monthly || 0,
+      top_5: subs.slice(0, 5).map(s => ({ name: s.name, amount: Number(s.amount || 0) })),
+    };
 
     loadInsight('income');
   }
@@ -1352,6 +1404,15 @@
     `;
 
     renderFixedFlexTable(months, data.fixed_categories || [], data.flexible_categories || []);
+
+    window.dashboardSummary = window.dashboardSummary || {};
+    window.dashboardSummary.cashflow = {
+      months_shown: months.length,
+      avg_spending: avgSpending,
+      avg_net: avgNet,
+      net_total: net,
+    };
+
     loadInsight('cashflow');
   }
 
