@@ -8,9 +8,10 @@ The registry is **internal-only** by design (`design/chat_agent.md`). No
 external client speaks to it — no MCP server, no HTTP tool routes. The only
 caller is `src/chat_agent.py`.
 
-Every handler reads the reconciled view `v_transactions_recon` (and
+Every handler reads the effective view `v_transactions_effective` (and
 `accounts`), never the raw `transactions` table. This guarantees the chat
-numbers match the dashboard numbers.
+numbers match the dashboard numbers, including the user's category /
+flow_type overrides and rule-materialized corrections.
 """
 
 from __future__ import annotations
@@ -31,6 +32,14 @@ from src.dashboard_queries import (
     _month_key,
     _parse_iso,
     _to_f,
+)
+from src import overrides as overrides_mod
+from src.storage import (
+    AuditStore,
+    OverrideStore,
+    RuleStore,
+    TransactionStore,
+    VALID_MATCH_TYPES,
 )
 
 
@@ -194,8 +203,8 @@ def _closest_strings(target: str, candidates, k: int = 3) -> list[str]:
 def _known_categories(user_id: str) -> list[str]:
     """Distinct categories for this user, excluding transfers/dupes."""
     sql = (
-        "SELECT DISTINCT category FROM v_transactions_recon "
-        "WHERE user_id = ? AND is_internal_transfer = 0 AND is_duplicate = 0 "
+        "SELECT DISTINCT category FROM v_transactions_effective "
+        "WHERE user_id = ? AND is_internal_transfer = 0 AND is_duplicate = 0 AND is_user_excluded = 0 "
         "AND category IS NOT NULL AND category != '' "
         "ORDER BY category"
     )
@@ -220,8 +229,8 @@ def _handle_list_categories(user_id: str, args: dict) -> dict:
     end = _opt_date(args, "end")
     sql = (
         "SELECT category, COUNT(*) AS n, MAX(date) AS last_seen "
-        "FROM v_transactions_recon "
-        "WHERE user_id = ? AND is_internal_transfer = 0 AND is_duplicate = 0 "
+        "FROM v_transactions_effective "
+        "WHERE user_id = ? AND is_internal_transfer = 0 AND is_duplicate = 0 AND is_user_excluded = 0 "
         "AND category IS NOT NULL AND category != ''"
     )
     params: list = [user_id]
@@ -259,7 +268,7 @@ def _handle_query_spending_breakdown(user_id: str, args: dict) -> dict:
     for r in rows:
         if r["flow_type_recon"] != "spending":
             continue
-        if r["is_internal_transfer"] or r["is_duplicate"]:
+        if r["is_internal_transfer"] or r["is_duplicate"] or r["is_user_excluded"]:
             continue
         if cat_lc and (r["category"] or "").lower() != cat_lc:
             continue
@@ -307,7 +316,7 @@ def _handle_query_income_breakdown(user_id: str, args: dict) -> dict:
     for r in rows:
         if r["flow_type_recon"] != "income":
             continue
-        if r["is_internal_transfer"] or r["is_duplicate"]:
+        if r["is_internal_transfer"] or r["is_duplicate"] or r["is_user_excluded"]:
             continue
         amt = float(r["amount"])
         total += amt
@@ -449,6 +458,359 @@ def _handle_cashflow_summary(user_id: str, args: dict) -> dict:
     }
 
 
+# --- Override / rule handlers (Phase 1C) -------------------------------------
+#
+# These tools mutate the user overlay. They all accept optional
+# `chat_session_id` and `chat_message_id` args so the audit log records the
+# provenance of every change. The chat agent passes these in automatically;
+# direct testing can omit them.
+
+
+_VALID_FLOW_TYPES = (
+    "spending", "income", "transfer", "interest", "fee", "refund",
+)
+
+
+def _validate_flow_type(value: Optional[str]) -> Optional[str]:
+    if value is None or value == "":
+        return None
+    if value not in _VALID_FLOW_TYPES:
+        raise ToolError(
+            f"flow_type must be one of {_VALID_FLOW_TYPES}, got {value!r}"
+        )
+    return value
+
+
+def _coerce_is_excluded(value) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        v = int(value)
+    except Exception:
+        raise ToolError("is_excluded must be 0 or 1")
+    if v not in (0, 1):
+        raise ToolError("is_excluded must be 0 or 1")
+    return v
+
+
+def _require_transaction(user_id: str, tx_id: str) -> None:
+    """Confirm the tx exists and belongs to this user, so we never let the
+    LLM hallucinate a transaction_id into the overrides table."""
+    if not tx_id:
+        raise ToolError("missing required field 'transaction_id'")
+    TransactionStore.init_db()
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(TransactionStore.DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM transactions WHERE id = ? AND user_id = ?",
+            (tx_id, user_id),
+        ).fetchone()
+    if not row:
+        raise ToolError(
+            f"unknown transaction_id {tx_id!r} for this user",
+            hint="use list_transactions to find a real id from the current view",
+        )
+
+
+def _override_row_with_raw(user_id: str, tx_id: str) -> dict:
+    """Return a small summary of the override + raw row for the LLM/UI."""
+    import sqlite3 as _sqlite3
+    TransactionStore.init_db()
+    with _sqlite3.connect(TransactionStore.DB_PATH) as conn:
+        conn.row_factory = _sqlite3.Row
+        row = conn.execute(
+            "SELECT id, date, amount, description, "
+            "category AS raw_category, flow_type AS raw_flow_type "
+            "FROM transactions WHERE id = ? AND user_id = ?",
+            (tx_id, user_id),
+        ).fetchone()
+    raw = dict(row) if row else {}
+    ov = OverrideStore.get(user_id, tx_id)
+    return {
+        "transaction_id": tx_id,
+        "date":           raw.get("date"),
+        "description":    raw.get("description"),
+        "amount":         raw.get("amount"),
+        "raw_category":   raw.get("raw_category"),
+        "raw_flow_type":  raw.get("raw_flow_type"),
+        "override":       ov,
+    }
+
+
+def _handle_preview_rule_matches(user_id: str, args: dict) -> dict:
+    mt = args.get("match_type")
+    if mt not in VALID_MATCH_TYPES:
+        raise ToolError(
+            f"match_type must be one of {VALID_MATCH_TYPES}, got {mt!r}"
+        )
+    mv = args.get("match_value") or ""
+    if not mv.strip():
+        raise ToolError("match_value must be non-empty")
+    out = overrides_mod.preview_rule_matches(
+        user_id, match_type=mt, match_value=mv, sample_limit=5,
+    )
+    # Tell the LLM what the rule *would* change so it can announce the impact
+    # without a second tool call.
+    out["proposed"] = {
+        "target_category":    args.get("target_category"),
+        "target_flow_type":   _validate_flow_type(args.get("target_flow_type")),
+        "target_is_excluded": _coerce_is_excluded(args.get("target_is_excluded")),
+        "match_type":         mt,
+        "match_value":        mv,
+    }
+    return out
+
+
+def _handle_set_override(user_id: str, args: dict) -> dict:
+    tx_id = args.get("transaction_id")
+    _require_transaction(user_id, tx_id)
+    category = args.get("category")
+    flow_type = _validate_flow_type(args.get("flow_type"))
+    is_excluded = _coerce_is_excluded(args.get("is_excluded"))
+    note = (args.get("note") or "").strip()
+    if category is None and flow_type is None and is_excluded is None:
+        raise ToolError(
+            "set_override needs at least one of category / flow_type / is_excluded"
+        )
+    before = OverrideStore.get(user_id, tx_id)
+    after = OverrideStore.set_override(
+        user_id, tx_id,
+        category=category, flow_type=flow_type, is_excluded=is_excluded,
+        note=note,
+        chat_session_id=args.get("_chat_session_id"),
+        chat_message_id=args.get("_chat_message_id"),
+    )
+    return {
+        "ok": True,
+        "before": before,
+        "after": after,
+        "row": _override_row_with_raw(user_id, tx_id),
+    }
+
+
+def _handle_set_overrides_bulk(user_id: str, args: dict) -> dict:
+    tx_ids = args.get("transaction_ids") or []
+    if not isinstance(tx_ids, list) or not tx_ids:
+        raise ToolError("transaction_ids must be a non-empty list")
+    if len(tx_ids) > 200:
+        raise ToolError("too many transaction_ids; cap is 200 per call")
+    category = args.get("category")
+    flow_type = _validate_flow_type(args.get("flow_type"))
+    is_excluded = _coerce_is_excluded(args.get("is_excluded"))
+    note = (args.get("note") or "").strip()
+    if category is None and flow_type is None and is_excluded is None:
+        raise ToolError(
+            "set_overrides_bulk needs at least one of category / flow_type / is_excluded"
+        )
+    session_id = args.get("_chat_session_id")
+    message_id = args.get("_chat_message_id")
+    count = 0
+    failed: list[str] = []
+    for tx_id in tx_ids:
+        try:
+            _require_transaction(user_id, tx_id)
+            OverrideStore.set_override(
+                user_id, tx_id,
+                category=category, flow_type=flow_type, is_excluded=is_excluded,
+                note=note,
+                chat_session_id=session_id, chat_message_id=message_id,
+            )
+            count += 1
+        except ToolError:
+            failed.append(tx_id)
+    return {"ok": True, "count": count, "failed_transaction_ids": failed}
+
+
+def _handle_clear_override(user_id: str, args: dict) -> dict:
+    tx_id = args.get("transaction_id")
+    _require_transaction(user_id, tx_id)
+    removed = OverrideStore.clear_override(
+        user_id, tx_id,
+        chat_session_id=args.get("_chat_session_id"),
+        chat_message_id=args.get("_chat_message_id"),
+    )
+    return {"ok": removed is not None, "before": removed}
+
+
+def _handle_create_category_rule(user_id: str, args: dict) -> dict:
+    mt = args.get("match_type")
+    if mt not in VALID_MATCH_TYPES:
+        raise ToolError(
+            f"match_type must be one of {VALID_MATCH_TYPES}, got {mt!r}"
+        )
+    mv = args.get("match_value") or ""
+    if not mv.strip():
+        raise ToolError("match_value must be non-empty")
+    target_category = args.get("target_category")
+    target_flow_type = _validate_flow_type(args.get("target_flow_type"))
+    target_is_excluded = _coerce_is_excluded(args.get("target_is_excluded"))
+    if (target_category is None
+            and target_flow_type is None
+            and target_is_excluded is None):
+        raise ToolError(
+            "rule needs at least one of target_category / target_flow_type / target_is_excluded"
+        )
+    note = (args.get("note") or "").strip()
+    priority = int(args.get("priority") or 100)
+    apply_to_past = args.get("apply_to_past")
+    if apply_to_past is None:
+        apply_to_past = True
+    session_id = args.get("_chat_session_id")
+    message_id = args.get("_chat_message_id")
+
+    rule_id = RuleStore.insert(
+        user_id,
+        match_type=mt,
+        match_value=mv,
+        target_category=target_category,
+        target_flow_type=target_flow_type,
+        target_is_excluded=target_is_excluded,
+        priority=priority,
+        note=note,
+    )
+    # Write the create_rule audit row.
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(TransactionStore.DB_PATH) as conn:
+        AuditStore.append_conn(
+            conn, user_id, "create_rule",
+            rule_id=rule_id,
+            before=None,
+            after=RuleStore.get(user_id, rule_id),
+            chat_session_id=session_id,
+            chat_message_id=message_id,
+        )
+        conn.commit()
+
+    stats = {"materialized": 0, "skipped_manual": 0, "skipped_priority": 0}
+    if apply_to_past:
+        stats = overrides_mod.materialize_rule(
+            user_id, rule_id,
+            chat_session_id=session_id, chat_message_id=message_id,
+        )
+    return {
+        "rule_id": rule_id,
+        "rule": RuleStore.get(user_id, rule_id),
+        "materialized_count": stats["materialized"],
+        "skipped_manual": stats["skipped_manual"],
+        "skipped_priority": stats["skipped_priority"],
+    }
+
+
+def _handle_list_category_rules(user_id: str, args: dict) -> dict:
+    active_only = args.get("active_only")
+    if active_only is None:
+        active_only = True
+    rules = RuleStore.list_rules(user_id, active_only=bool(active_only))
+    # Count of rows each rule currently affects (`source_rule_id` in overrides).
+    import sqlite3 as _sqlite3
+    TransactionStore.init_db()
+    counts: dict[int, int] = {}
+    if rules:
+        with _sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT source_rule_id, COUNT(*) FROM transaction_overrides "
+                "WHERE user_id = ? AND source_kind = 'rule' "
+                "GROUP BY source_rule_id",
+                (user_id,),
+            ).fetchall()
+            for rid, n in rows:
+                if rid is not None:
+                    counts[int(rid)] = int(n)
+    out = []
+    for r in rules:
+        out.append({**r, "affects_count": counts.get(int(r["id"]), 0)})
+    return {"rules": out}
+
+
+def _handle_delete_category_rule(user_id: str, args: dict) -> dict:
+    rule_id = args.get("rule_id")
+    if rule_id is None:
+        raise ToolError("missing required field 'rule_id'")
+    rule_id = int(rule_id)
+    session_id = args.get("_chat_session_id")
+    message_id = args.get("_chat_message_id")
+    # First unmaterialize so audit ordering reads "rule_unmaterialize → delete_rule"
+    # from the bottom up, which matches what happened.
+    unmat = overrides_mod.unmaterialize_rule(
+        user_id, rule_id,
+        chat_session_id=session_id, chat_message_id=message_id,
+    )
+    deleted = RuleStore.delete(user_id, rule_id)
+    if deleted is None:
+        return {"ok": False, "error": f"rule {rule_id} not found"}
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(TransactionStore.DB_PATH) as conn:
+        AuditStore.append_conn(
+            conn, user_id, "delete_rule",
+            rule_id=rule_id,
+            before=deleted,
+            after=None,
+            chat_session_id=session_id,
+            chat_message_id=message_id,
+        )
+        conn.commit()
+    return {"ok": True, "unmaterialized_count": unmat, "rule": deleted}
+
+
+def _handle_list_overrides(user_id: str, args: dict) -> dict:
+    tx_id = args.get("transaction_id")
+    since = args.get("since")
+    limit = int(args.get("limit") or 20)
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+    rows = OverrideStore.list_overrides(
+        user_id, transaction_id=tx_id, since=since, limit=limit,
+    )
+    # Hydrate each row with the raw description so the LLM can show
+    # "PACIFIC TABLE #4421 NY" instead of just an opaque id.
+    if rows:
+        TransactionStore.init_db()
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = _sqlite3.Row
+            ids = tuple(r["transaction_id"] for r in rows)
+            placeholders = ",".join(["?"] * len(ids))
+            raws = {
+                r["id"]: dict(r) for r in conn.execute(
+                    f"SELECT id, date, description, amount, "
+                    f"category AS raw_category, flow_type AS raw_flow_type "
+                    f"FROM transactions WHERE user_id = ? AND id IN ({placeholders})",
+                    (user_id, *ids),
+                ).fetchall()
+            }
+        for r in rows:
+            raw = raws.get(r["transaction_id"], {})
+            r["date"]          = raw.get("date")
+            r["description"]   = raw.get("description")
+            r["amount"]        = raw.get("amount")
+            r["raw_category"]  = raw.get("raw_category")
+            r["raw_flow_type"] = raw.get("raw_flow_type")
+    return {"overrides": rows}
+
+
+def _handle_list_override_history(user_id: str, args: dict) -> dict:
+    tx_id = args.get("transaction_id")
+    rule_id = args.get("rule_id")
+    since = args.get("since")
+    limit = int(args.get("limit") or 20)
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+    events = AuditStore.list_events(
+        user_id,
+        transaction_id=tx_id,
+        rule_id=int(rule_id) if rule_id is not None else None,
+        since=since,
+        limit=limit,
+    )
+    return {"events": events}
+
+
 # --- Schemas + REGISTRY ------------------------------------------------------
 
 _SCHEMAS: dict[str, dict] = {
@@ -547,6 +909,97 @@ _SCHEMAS: dict[str, dict] = {
         },
         "required": [],
     },
+    "preview_rule_matches": {
+        "type": "object",
+        "properties": {
+            "match_type":         {"type": "string",
+                                    "enum": list(VALID_MATCH_TYPES)},
+            "match_value":        {"type": "string"},
+            "target_category":    {"type": "string"},
+            "target_flow_type":   {"type": "string",
+                                    "enum": list(_VALID_FLOW_TYPES)},
+            "target_is_excluded": {"type": "integer", "minimum": 0, "maximum": 1},
+        },
+        "required": ["match_type", "match_value"],
+    },
+    "set_override": {
+        "type": "object",
+        "properties": {
+            "transaction_id": {"type": "string"},
+            "category":       {"type": "string"},
+            "flow_type":      {"type": "string", "enum": list(_VALID_FLOW_TYPES)},
+            "is_excluded":    {"type": "integer", "minimum": 0, "maximum": 1},
+            "note":           {"type": "string"},
+        },
+        "required": ["transaction_id"],
+    },
+    "set_overrides_bulk": {
+        "type": "object",
+        "properties": {
+            "transaction_ids": {"type": "array", "items": {"type": "string"}},
+            "category":        {"type": "string"},
+            "flow_type":       {"type": "string", "enum": list(_VALID_FLOW_TYPES)},
+            "is_excluded":     {"type": "integer", "minimum": 0, "maximum": 1},
+            "note":            {"type": "string"},
+        },
+        "required": ["transaction_ids"],
+    },
+    "clear_override": {
+        "type": "object",
+        "properties": {
+            "transaction_id": {"type": "string"},
+        },
+        "required": ["transaction_id"],
+    },
+    "create_category_rule": {
+        "type": "object",
+        "properties": {
+            "match_type":         {"type": "string",
+                                    "enum": list(VALID_MATCH_TYPES)},
+            "match_value":        {"type": "string"},
+            "target_category":    {"type": "string"},
+            "target_flow_type":   {"type": "string",
+                                    "enum": list(_VALID_FLOW_TYPES)},
+            "target_is_excluded": {"type": "integer", "minimum": 0, "maximum": 1},
+            "note":               {"type": "string"},
+            "priority":           {"type": "integer"},
+            "apply_to_past":      {"type": "boolean"},
+        },
+        "required": ["match_type", "match_value"],
+    },
+    "list_category_rules": {
+        "type": "object",
+        "properties": {
+            "active_only": {"type": "boolean"},
+        },
+        "required": [],
+    },
+    "delete_category_rule": {
+        "type": "object",
+        "properties": {
+            "rule_id": {"type": "integer"},
+        },
+        "required": ["rule_id"],
+    },
+    "list_overrides": {
+        "type": "object",
+        "properties": {
+            "transaction_id": {"type": "string"},
+            "since":          {"type": "string", "format": "date"},
+            "limit":          {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "required": [],
+    },
+    "list_override_history": {
+        "type": "object",
+        "properties": {
+            "transaction_id": {"type": "string"},
+            "rule_id":        {"type": "integer"},
+            "since":          {"type": "string", "format": "date"},
+            "limit":          {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "required": [],
+    },
 }
 
 _DESCRIPTIONS: dict[str, str] = {
@@ -584,6 +1037,49 @@ _DESCRIPTIONS: dict[str, str] = {
     "cashflow_summary":
         "Income vs. spending per month over the last N months, with averages "
         "and the fixed/flexible category split.",
+    "preview_rule_matches":
+        "Dry run for a category rule: how many transactions would it affect, "
+        "and what do a few sample rows look like? ALWAYS call this before "
+        "create_category_rule so you can announce the scope and confirm with "
+        "the user. Pass the proposed targets too — they round-trip into the "
+        "preview output so you can show before → after.",
+    "set_override":
+        "Override one transaction's category, flow_type, and/or is_excluded. "
+        "Use when the user points at a SINGLE row. For 'fix all matching rows', "
+        "call create_category_rule instead. Manual overrides always win over "
+        "rules.",
+    "set_overrides_bulk":
+        "Apply the same override (category / flow_type / is_excluded) to a "
+        "list of transaction_ids. Use when the user said 'fix all past "
+        "matches' but NOT 'and future ones too' — for past+future, use "
+        "create_category_rule with apply_to_past=true.",
+    "clear_override":
+        "Remove any user override (manual or rule-materialized) on this "
+        "transaction. The row reverts to its raw category / flow_type.",
+    "create_category_rule":
+        "Create a rule that auto-categorizes any transaction whose "
+        "description matches a pattern, now and forever. Use when the user "
+        "wants 'all past AND future' to be fixed. Set apply_to_past=true "
+        "(default) to also fix the existing matches. Prefer match_type="
+        "'merchant_canonical' when the user points at a merchant — it "
+        "ignores POS prefixes / store IDs / locations.",
+    "list_category_rules":
+        "Show the user's active category rules: what each one matches, what "
+        "it sets, and how many rows it currently affects. Use when the user "
+        "asks 'what rules do I have?'.",
+    "delete_category_rule":
+        "Remove a rule by id. Unwinds every rule-materialized override the "
+        "rule created (user_manual overrides are untouched). Use when the "
+        "user says 'undo that rule'.",
+    "list_overrides":
+        "Show what's currently overridden — per-row before → after — for the "
+        "user. Use when the user asks 'what's been changed?' or 'what's "
+        "different from raw?'. Optional transaction_id narrows to one row.",
+    "list_override_history":
+        "Show the append-only audit history: when each override / rule was "
+        "set, by which chat session, and what the before/after was. Use for "
+        "'why is this row Kids Education?' (with transaction_id) or 'what "
+        "changed recently?' (with since).",
 }
 
 
@@ -604,6 +1100,16 @@ REGISTRY: dict[str, ToolSpec] = {
         ("top_merchants",            _handle_top_merchants),
         ("compare_periods",          _handle_compare_periods),
         ("cashflow_summary",         _handle_cashflow_summary),
+        # Override / rule tools (Phase 1C).
+        ("preview_rule_matches",     _handle_preview_rule_matches),
+        ("set_override",             _handle_set_override),
+        ("set_overrides_bulk",       _handle_set_overrides_bulk),
+        ("clear_override",           _handle_clear_override),
+        ("create_category_rule",     _handle_create_category_rule),
+        ("list_category_rules",      _handle_list_category_rules),
+        ("delete_category_rule",     _handle_delete_category_rule),
+        ("list_overrides",           _handle_list_overrides),
+        ("list_override_history",    _handle_list_override_history),
     ]
 }
 

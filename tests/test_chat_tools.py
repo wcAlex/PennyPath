@@ -33,14 +33,19 @@ def real_db(monkeypatch):
 
 
 class TestRegistryShape:
-    def test_nine_tools_registered(self):
-        assert len(chat_tools.REGISTRY) == 9
+    def test_all_tools_registered(self):
+        # 9 read tools + 9 override / rule tools.
+        assert len(chat_tools.REGISTRY) == 18
         names = set(chat_tools.REGISTRY)
         assert {
             "list_categories", "list_accounts",
             "query_spending_breakdown", "query_income_breakdown",
             "list_transactions", "category_trend", "top_merchants",
             "compare_periods", "cashflow_summary",
+            # Override / rule surface (Phase 1C):
+            "preview_rule_matches", "set_override", "set_overrides_bulk",
+            "clear_override", "create_category_rule", "list_category_rules",
+            "delete_category_rule", "list_overrides", "list_override_history",
         } <= names
 
     def test_each_tool_has_required_fields(self):
@@ -53,7 +58,7 @@ class TestRegistryShape:
 
     def test_to_openai_tools_shape(self):
         tools = chat_tools.to_openai_tools()
-        assert len(tools) == 9
+        assert len(tools) == 18
         for t in tools:
             assert t["type"] == "function"
             f = t["function"]
@@ -300,3 +305,188 @@ class TestCashflowSummary:
         # Fixed/flexible are flat string lists (we trim heavy blobs).
         assert all(isinstance(s, str) for s in r["fixed_categories"])
         assert all(isinstance(s, str) for s in r["flexible_categories"])
+
+
+# --- Override / rule tools (Phase 1C) ---------------------------------------
+# These use the tmp DB (don't touch real_db) so writes don't bleed into the
+# user's real data file.
+
+
+import sqlite3
+
+
+def _seed_tx(user_id="u1", tx_id="tx-1", *, description="PACIFIC TABLE #4421 NY",
+             category="Dining", flow_type="spending", amount=42.0,
+             date_str="2026-04-15") -> None:
+    from src.storage import TransactionStore
+    from datetime import datetime as _dt
+    TransactionStore.init_db()
+    now = _dt.now().isoformat()
+    with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO transactions "
+            "(id, date, amount, description, category, account_type, "
+            "source_file, user_id, account_id, source, dedup_hash, "
+            "flow_type, notes, section_type, ingested_at) "
+            "VALUES (?, ?, ?, ?, ?, 'credit', '', ?, 'acc-1', 'test', '', "
+            "?, '', 'purchase', ?)",
+            (tx_id, date_str, amount, description, category, user_id,
+             flow_type, now),
+        )
+        conn.commit()
+
+
+class TestPreviewRuleMatches:
+    def test_returns_total_and_sample(self):
+        _seed_tx(tx_id="tx-1", description="PACIFIC TABLE NY")
+        _seed_tx(tx_id="tx-2", description="TST*PACIFIC TABLE")
+        _seed_tx(tx_id="tx-3", description="Trader Joe's")
+        r = chat_tools.dispatch("u1", "preview_rule_matches", {
+            "match_type": "merchant_canonical",
+            "match_value": "Pacific Table",
+            "target_category": "Kids Education",
+        })
+        assert r["total_matched"] == 2
+        assert r["proposed"]["target_category"] == "Kids Education"
+
+    def test_rejects_unknown_match_type(self):
+        r = chat_tools.dispatch("u1", "preview_rule_matches", {
+            "match_type": "regex", "match_value": ".*",
+        })
+        assert "error" in r
+
+
+class TestSetOverride:
+    def test_single_category_override(self):
+        _seed_tx(tx_id="tx-1")
+        r = chat_tools.dispatch("u1", "set_override", {
+            "transaction_id": "tx-1",
+            "category": "Kids Education",
+        })
+        assert r["ok"] is True
+        assert r["after"]["category"] == "Kids Education"
+        assert r["after"]["source_kind"] == "user_manual"
+
+    def test_unknown_tx_id_returns_error(self):
+        r = chat_tools.dispatch("u1", "set_override", {
+            "transaction_id": "never-existed",
+            "category": "Travel",
+        })
+        assert "error" in r
+
+    def test_requires_at_least_one_field(self):
+        _seed_tx(tx_id="tx-1")
+        r = chat_tools.dispatch("u1", "set_override", {
+            "transaction_id": "tx-1",
+        })
+        assert "error" in r
+
+
+class TestBulkOverrides:
+    def test_applies_to_each_id(self):
+        _seed_tx(tx_id="tx-1")
+        _seed_tx(tx_id="tx-2")
+        _seed_tx(tx_id="tx-3")
+        r = chat_tools.dispatch("u1", "set_overrides_bulk", {
+            "transaction_ids": ["tx-1", "tx-2", "tx-3"],
+            "category": "Travel",
+        })
+        assert r["count"] == 3
+        from src.storage import OverrideStore
+        assert OverrideStore.get("u1", "tx-2")["category"] == "Travel"
+
+
+class TestClearOverride:
+    def test_clears_existing(self):
+        _seed_tx(tx_id="tx-1")
+        chat_tools.dispatch("u1", "set_override", {
+            "transaction_id": "tx-1", "category": "Travel",
+        })
+        r = chat_tools.dispatch("u1", "clear_override", {"transaction_id": "tx-1"})
+        assert r["ok"] is True
+        from src.storage import OverrideStore
+        assert OverrideStore.get("u1", "tx-1") is None
+
+
+class TestCreateRule:
+    def test_creates_and_materializes(self):
+        _seed_tx(tx_id="tx-1", description="PACIFIC TABLE NY", category="Dining")
+        _seed_tx(tx_id="tx-2", description="PACIFIC TABLE BK", category="Dining")
+        r = chat_tools.dispatch("u1", "create_category_rule", {
+            "match_type": "merchant_canonical",
+            "match_value": "Pacific Table",
+            "target_category": "Kids Education",
+            "apply_to_past": True,
+        })
+        assert r["materialized_count"] == 2
+        from src.storage import OverrideStore
+        assert OverrideStore.get("u1", "tx-1")["category"] == "Kids Education"
+        assert OverrideStore.get("u1", "tx-2")["source_rule_id"] == r["rule_id"]
+
+    def test_apply_to_past_false_creates_rule_only(self):
+        _seed_tx(tx_id="tx-1", description="PACIFIC TABLE NY")
+        r = chat_tools.dispatch("u1", "create_category_rule", {
+            "match_type": "merchant_canonical",
+            "match_value": "Pacific Table",
+            "target_category": "Kids Education",
+            "apply_to_past": False,
+        })
+        assert r["materialized_count"] == 0
+        from src.storage import OverrideStore
+        assert OverrideStore.get("u1", "tx-1") is None
+
+
+class TestListRules:
+    def test_returns_with_affects_count(self):
+        _seed_tx(tx_id="tx-1", description="PACIFIC TABLE NY")
+        _seed_tx(tx_id="tx-2", description="PACIFIC TABLE BK")
+        chat_tools.dispatch("u1", "create_category_rule", {
+            "match_type": "merchant_canonical",
+            "match_value": "Pacific Table",
+            "target_category": "Kids Education",
+        })
+        r = chat_tools.dispatch("u1", "list_category_rules", {})
+        assert len(r["rules"]) == 1
+        assert r["rules"][0]["affects_count"] == 2
+
+
+class TestDeleteRule:
+    def test_unwinds_materializations(self):
+        _seed_tx(tx_id="tx-1", description="PACIFIC TABLE NY")
+        created = chat_tools.dispatch("u1", "create_category_rule", {
+            "match_type": "merchant_canonical",
+            "match_value": "Pacific Table",
+            "target_category": "Kids Education",
+        })
+        rule_id = created["rule_id"]
+        r = chat_tools.dispatch("u1", "delete_category_rule", {"rule_id": rule_id})
+        assert r["ok"] is True
+        assert r["unmaterialized_count"] == 1
+        from src.storage import OverrideStore, RuleStore
+        assert OverrideStore.get("u1", "tx-1") is None
+        assert RuleStore.get("u1", rule_id) is None
+
+
+class TestListOverridesAndHistory:
+    def test_list_overrides_hydrates_description(self):
+        _seed_tx(tx_id="tx-1", description="PACIFIC TABLE NY")
+        chat_tools.dispatch("u1", "set_override", {
+            "transaction_id": "tx-1", "category": "Kids Education",
+        })
+        r = chat_tools.dispatch("u1", "list_overrides", {})
+        assert len(r["overrides"]) == 1
+        assert r["overrides"][0]["description"] == "PACIFIC TABLE NY"
+        assert r["overrides"][0]["raw_category"] == "Dining"
+
+    def test_history_records_set_and_clear(self):
+        _seed_tx(tx_id="tx-1")
+        chat_tools.dispatch("u1", "set_override", {
+            "transaction_id": "tx-1", "category": "Travel",
+        })
+        chat_tools.dispatch("u1", "clear_override", {"transaction_id": "tx-1"})
+        r = chat_tools.dispatch("u1", "list_override_history", {
+            "transaction_id": "tx-1",
+        })
+        actions = [e["action"] for e in r["events"]]
+        assert "set_override" in actions
+        assert "clear_override" in actions

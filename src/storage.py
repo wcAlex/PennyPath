@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 import hashlib
 import json
 import sqlite3
@@ -483,20 +483,114 @@ class TransactionStore:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_recon_user ON transactions_recon(user_id)")
 
-            # The view every dashboard / chat / analysis read goes through: raw
-            # columns + the recon overlay. LEFT JOIN + COALESCE so a not-yet-
-            # reconciled row still returns (falling back to raw flow_type).
-            conn.execute("DROP VIEW IF EXISTS v_transactions_recon")
+            # User overlay (Phase 1C — see design/overrides.md). Three tables:
+            # - transaction_overrides: per-tx user corrections (manual or
+            #   rule-materialized). One row per (user_id, transaction_id).
+            # - category_rules: patterns the user wants applied to all matching
+            #   rows, past and future.
+            # - override_audit: append-only history of every override / rule
+            #   mutation, with the chat session that produced it.
             conn.execute("""
-                CREATE VIEW v_transactions_recon AS
-                SELECT t.*,
-                    COALESCE(r.flow_type_recon, t.flow_type) AS flow_type_recon,
-                    COALESCE(r.signed_amount, 0)             AS signed_amount,
-                    COALESCE(r.is_internal_transfer, 0)      AS is_internal_transfer,
-                    r.transfer_group_id                      AS transfer_group_id,
-                    COALESCE(r.is_duplicate, 0)              AS is_duplicate
+                CREATE TABLE IF NOT EXISTS transaction_overrides (
+                    user_id        TEXT NOT NULL,
+                    transaction_id TEXT NOT NULL,
+                    category       TEXT,
+                    flow_type      TEXT,
+                    is_excluded    INTEGER,
+                    source_kind    TEXT NOT NULL DEFAULT 'user_manual',
+                    source_rule_id INTEGER,
+                    note           TEXT NOT NULL DEFAULT '',
+                    created_at     TEXT NOT NULL,
+                    updated_at     TEXT NOT NULL,
+                    PRIMARY KEY (user_id, transaction_id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_overrides_rule "
+                "ON transaction_overrides(source_rule_id)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS category_rules (
+                    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id            TEXT NOT NULL,
+                    match_type         TEXT NOT NULL,
+                    match_value        TEXT NOT NULL,
+                    target_category    TEXT,
+                    target_flow_type   TEXT,
+                    target_is_excluded INTEGER,
+                    priority           INTEGER NOT NULL DEFAULT 100,
+                    active             INTEGER NOT NULL DEFAULT 1,
+                    note               TEXT NOT NULL DEFAULT '',
+                    created_at         TEXT NOT NULL,
+                    updated_at         TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rules_user "
+                "ON category_rules(user_id, active)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS override_audit (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id          TEXT NOT NULL,
+                    at               TEXT NOT NULL,
+                    action           TEXT NOT NULL,
+                    transaction_id   TEXT,
+                    rule_id          INTEGER,
+                    before_json      TEXT NOT NULL DEFAULT 'null',
+                    after_json       TEXT NOT NULL DEFAULT 'null',
+                    chat_session_id  TEXT,
+                    chat_message_id  TEXT,
+                    note             TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_user_at "
+                "ON override_audit(user_id, at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_tx "
+                "ON override_audit(user_id, transaction_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_rule "
+                "ON override_audit(user_id, rule_id)"
+            )
+
+            # The view every dashboard / chat / analysis read goes through: raw
+            # columns + the recon overlay + the user overlay. LEFT JOINs +
+            # COALESCE preserve precedence: explicit override > rule override >
+            # system recon > raw. See design/overrides.md.
+            conn.execute("DROP VIEW IF EXISTS v_transactions_recon")
+            conn.execute("DROP VIEW IF EXISTS v_transactions_effective")
+            conn.execute("""
+                CREATE VIEW v_transactions_effective AS
+                SELECT t.id,
+                    t.date,
+                    t.amount,
+                    t.description,
+                    COALESCE(o.category, t.category)                      AS category,
+                    t.account_type,
+                    t.account_id,
+                    t.user_id,
+                    t.section_type,
+                    t.source,
+                    t.notes,
+                    COALESCE(o.flow_type, r.flow_type_recon, t.flow_type) AS flow_type_recon,
+                    COALESCE(r.signed_amount, 0)                          AS signed_amount,
+                    COALESCE(r.is_internal_transfer, 0)                   AS is_internal_transfer,
+                    r.transfer_group_id                                   AS transfer_group_id,
+                    COALESCE(r.is_duplicate, 0)                           AS is_duplicate,
+                    COALESCE(o.is_excluded, 0)                            AS is_user_excluded,
+                    o.source_kind                                         AS override_source,
+                    o.source_rule_id                                      AS override_rule_id,
+                    o.note                                                AS override_note
                 FROM transactions t
-                LEFT JOIN transactions_recon r ON r.id = t.id
+                LEFT JOIN transactions_recon    r ON r.id = t.id
+                LEFT JOIN transaction_overrides o
+                       ON o.user_id = t.user_id AND o.transaction_id = t.id
             """)
 
             conn.commit()
@@ -855,3 +949,431 @@ class WikiStore:
     @classmethod
     def exists(cls) -> bool:
         return cls.PATH.exists()
+
+
+# --- User overlay: per-tx overrides + audit (Phase 1C) -----------------------
+# See design/overrides.md for the full contract. All mutations write a row
+# into `override_audit` inside the same DB transaction so the log never
+# drifts from the data.
+
+
+# Closed enum — what kind of override row this is.
+SOURCE_KIND_USER_MANUAL = "user_manual"
+SOURCE_KIND_RULE = "rule"
+
+# Closed enum — audit action values. See design/overrides.md → Audit action.
+AUDIT_SET_OVERRIDE       = "set_override"
+AUDIT_CLEAR_OVERRIDE     = "clear_override"
+AUDIT_CREATE_RULE        = "create_rule"
+AUDIT_EDIT_RULE          = "edit_rule"
+AUDIT_DELETE_RULE        = "delete_rule"
+AUDIT_PAUSE_RULE         = "pause_rule"
+AUDIT_RESUME_RULE        = "resume_rule"
+AUDIT_RULE_MATERIALIZE   = "rule_materialize"
+AUDIT_RULE_UNMATERIALIZE = "rule_unmaterialize"
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat()
+
+
+def _override_row_to_dict(row) -> dict:
+    return {
+        "user_id":        row["user_id"],
+        "transaction_id": row["transaction_id"],
+        "category":       row["category"],
+        "flow_type":      row["flow_type"],
+        "is_excluded":    row["is_excluded"],
+        "source_kind":    row["source_kind"],
+        "source_rule_id": row["source_rule_id"],
+        "note":           row["note"],
+        "created_at":     row["created_at"],
+        "updated_at":     row["updated_at"],
+    }
+
+
+class AuditStore:
+    """Append-only history. Writers pass an open sqlite3 connection so the
+    audit insert lands in the same transaction as the override mutation."""
+
+    @staticmethod
+    def append_conn(
+        conn: sqlite3.Connection,
+        user_id: str,
+        action: str,
+        *,
+        transaction_id: Optional[str] = None,
+        rule_id: Optional[int] = None,
+        before: Any = None,
+        after: Any = None,
+        chat_session_id: Optional[str] = None,
+        chat_message_id: Optional[str] = None,
+        note: str = "",
+    ) -> None:
+        conn.execute(
+            "INSERT INTO override_audit "
+            "(user_id, at, action, transaction_id, rule_id, "
+            "before_json, after_json, chat_session_id, chat_message_id, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id, _now_iso(), action, transaction_id, rule_id,
+                json.dumps(before, default=str), json.dumps(after, default=str),
+                chat_session_id, chat_message_id, note,
+            ),
+        )
+
+    @classmethod
+    def list_events(
+        cls,
+        user_id: str,
+        *,
+        transaction_id: Optional[str] = None,
+        rule_id: Optional[int] = None,
+        since: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[dict]:
+        TransactionStore.init_db()
+        sql = (
+            "SELECT id, user_id, at, action, transaction_id, rule_id, "
+            "before_json, after_json, chat_session_id, chat_message_id, note "
+            "FROM override_audit WHERE user_id = ?"
+        )
+        params: list = [user_id]
+        if transaction_id is not None:
+            sql += " AND transaction_id = ?"
+            params.append(transaction_id)
+        if rule_id is not None:
+            sql += " AND rule_id = ?"
+            params.append(rule_id)
+        if since:
+            sql += " AND at >= ?"
+            params.append(since)
+        sql += " ORDER BY at DESC, id DESC LIMIT ?"
+        params.append(int(limit))
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(sql, params).fetchall()
+        out: List[dict] = []
+        for r in rows:
+            try:
+                before = json.loads(r["before_json"])
+            except Exception:
+                before = None
+            try:
+                after = json.loads(r["after_json"])
+            except Exception:
+                after = None
+            out.append({
+                "id":               r["id"],
+                "user_id":          r["user_id"],
+                "at":               r["at"],
+                "action":           r["action"],
+                "transaction_id":   r["transaction_id"],
+                "rule_id":          r["rule_id"],
+                "before":           before,
+                "after":            after,
+                "chat_session_id":  r["chat_session_id"],
+                "chat_message_id":  r["chat_message_id"],
+                "note":             r["note"],
+            })
+        return out
+
+
+class OverrideStore:
+    """Per-transaction overrides — manual and rule-materialized share one
+    table. `source_kind` distinguishes; manual always wins on upsert."""
+
+    @classmethod
+    def _read(cls, conn: sqlite3.Connection, user_id: str, transaction_id: str) -> Optional[dict]:
+        row = conn.execute(
+            "SELECT user_id, transaction_id, category, flow_type, is_excluded, "
+            "source_kind, source_rule_id, note, created_at, updated_at "
+            "FROM transaction_overrides WHERE user_id = ? AND transaction_id = ?",
+            (user_id, transaction_id),
+        ).fetchone()
+        return _override_row_to_dict(row) if row else None
+
+    @classmethod
+    def get(cls, user_id: str, transaction_id: str) -> Optional[dict]:
+        TransactionStore.init_db()
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            return cls._read(conn, user_id, transaction_id)
+
+    @classmethod
+    def set_override(
+        cls,
+        user_id: str,
+        transaction_id: str,
+        *,
+        category: Optional[str] = None,
+        flow_type: Optional[str] = None,
+        is_excluded: Optional[int] = None,
+        note: str = "",
+        chat_session_id: Optional[str] = None,
+        chat_message_id: Optional[str] = None,
+    ) -> dict:
+        """Upsert a manual override. Replaces any existing row (including a
+        rule-materialized one) at this PK. At least one of category /
+        flow_type / is_excluded must be non-None.
+        """
+        if category is None and flow_type is None and is_excluded is None:
+            raise ValueError(
+                "set_override needs at least one of category / flow_type / is_excluded"
+            )
+        TransactionStore.init_db()
+        now = _now_iso()
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            before = cls._read(conn, user_id, transaction_id)
+            created_at = before["created_at"] if before else now
+            conn.execute(
+                "INSERT INTO transaction_overrides "
+                "(user_id, transaction_id, category, flow_type, is_excluded, "
+                "source_kind, source_rule_id, note, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) "
+                "ON CONFLICT(user_id, transaction_id) DO UPDATE SET "
+                "  category       = excluded.category, "
+                "  flow_type      = excluded.flow_type, "
+                "  is_excluded    = excluded.is_excluded, "
+                "  source_kind    = excluded.source_kind, "
+                "  source_rule_id = NULL, "
+                "  note           = excluded.note, "
+                "  updated_at     = excluded.updated_at",
+                (
+                    user_id, transaction_id, category, flow_type,
+                    int(is_excluded) if is_excluded is not None else None,
+                    SOURCE_KIND_USER_MANUAL, note, created_at, now,
+                ),
+            )
+            after = cls._read(conn, user_id, transaction_id)
+            AuditStore.append_conn(
+                conn, user_id, AUDIT_SET_OVERRIDE,
+                transaction_id=transaction_id,
+                before=before, after=after,
+                chat_session_id=chat_session_id,
+                chat_message_id=chat_message_id,
+            )
+            conn.commit()
+            return after or {}
+
+    @classmethod
+    def clear_override(
+        cls,
+        user_id: str,
+        transaction_id: str,
+        *,
+        chat_session_id: Optional[str] = None,
+        chat_message_id: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Remove any override at this PK (manual or rule). Returns the row
+        that was deleted, or None if there was none.
+        """
+        TransactionStore.init_db()
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            before = cls._read(conn, user_id, transaction_id)
+            if before is None:
+                return None
+            conn.execute(
+                "DELETE FROM transaction_overrides "
+                "WHERE user_id = ? AND transaction_id = ?",
+                (user_id, transaction_id),
+            )
+            AuditStore.append_conn(
+                conn, user_id, AUDIT_CLEAR_OVERRIDE,
+                transaction_id=transaction_id,
+                before=before, after=None,
+                chat_session_id=chat_session_id,
+                chat_message_id=chat_message_id,
+            )
+            conn.commit()
+            return before
+
+    @classmethod
+    def list_overrides(
+        cls,
+        user_id: str,
+        *,
+        transaction_id: Optional[str] = None,
+        since: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[dict]:
+        """Return overrides for this user (most recently updated first)."""
+        TransactionStore.init_db()
+        sql = (
+            "SELECT user_id, transaction_id, category, flow_type, is_excluded, "
+            "source_kind, source_rule_id, note, created_at, updated_at "
+            "FROM transaction_overrides WHERE user_id = ?"
+        )
+        params: list = [user_id]
+        if transaction_id is not None:
+            sql += " AND transaction_id = ?"
+            params.append(transaction_id)
+        if since:
+            sql += " AND updated_at >= ?"
+            params.append(since)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(int(limit))
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(sql, params).fetchall()
+        return [_override_row_to_dict(r) for r in rows]
+
+
+# --- Rule storage ------------------------------------------------------------
+
+
+VALID_MATCH_TYPES = ("description_exact", "description_substring", "merchant_canonical")
+
+
+def _rule_row_to_dict(row) -> dict:
+    return {
+        "id":                 row["id"],
+        "user_id":            row["user_id"],
+        "match_type":         row["match_type"],
+        "match_value":        row["match_value"],
+        "target_category":    row["target_category"],
+        "target_flow_type":   row["target_flow_type"],
+        "target_is_excluded": row["target_is_excluded"],
+        "priority":           row["priority"],
+        "active":             row["active"],
+        "note":               row["note"],
+        "created_at":         row["created_at"],
+        "updated_at":         row["updated_at"],
+    }
+
+
+class RuleStore:
+    """CRUD on category_rules. Materialization (turning a rule into per-tx
+    override rows) lives in src/overrides.py — it needs the matcher and the
+    raw rows. RuleStore only owns the rule rows."""
+
+    @classmethod
+    def _validate_targets(cls, target_category, target_flow_type, target_is_excluded) -> None:
+        if (target_category is None
+                and target_flow_type is None
+                and target_is_excluded is None):
+            raise ValueError(
+                "rule must set at least one of target_category / "
+                "target_flow_type / target_is_excluded"
+            )
+
+    @classmethod
+    def _validate_match(cls, match_type, match_value) -> None:
+        if match_type not in VALID_MATCH_TYPES:
+            raise ValueError(
+                f"match_type must be one of {VALID_MATCH_TYPES}, got {match_type!r}"
+            )
+        if not (match_value and match_value.strip()):
+            raise ValueError("match_value must be non-empty")
+
+    @classmethod
+    def get(cls, user_id: str, rule_id: int) -> Optional[dict]:
+        TransactionStore.init_db()
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT id, user_id, match_type, match_value, target_category, "
+                "target_flow_type, target_is_excluded, priority, active, note, "
+                "created_at, updated_at "
+                "FROM category_rules WHERE user_id = ? AND id = ?",
+                (user_id, rule_id),
+            ).fetchone()
+        return _rule_row_to_dict(row) if row else None
+
+    @classmethod
+    def list_rules(
+        cls,
+        user_id: str,
+        *,
+        active_only: bool = False,
+    ) -> List[dict]:
+        TransactionStore.init_db()
+        sql = (
+            "SELECT id, user_id, match_type, match_value, target_category, "
+            "target_flow_type, target_is_excluded, priority, active, note, "
+            "created_at, updated_at "
+            "FROM category_rules WHERE user_id = ?"
+        )
+        params: list = [user_id]
+        if active_only:
+            sql += " AND active = 1"
+        sql += " ORDER BY priority DESC, id ASC"
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(sql, params).fetchall()
+        return [_rule_row_to_dict(r) for r in rows]
+
+    @classmethod
+    def insert(
+        cls,
+        user_id: str,
+        *,
+        match_type: str,
+        match_value: str,
+        target_category: Optional[str] = None,
+        target_flow_type: Optional[str] = None,
+        target_is_excluded: Optional[int] = None,
+        priority: int = 100,
+        note: str = "",
+    ) -> int:
+        """Insert a new rule row. Returns the new rule_id.
+
+        Audit + materialization are the caller's responsibility — they live
+        in src/overrides.py because they touch transactions/overrides too.
+        """
+        cls._validate_match(match_type, match_value)
+        cls._validate_targets(target_category, target_flow_type, target_is_excluded)
+        TransactionStore.init_db()
+        now = _now_iso()
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            cur = conn.execute(
+                "INSERT INTO category_rules "
+                "(user_id, match_type, match_value, target_category, "
+                "target_flow_type, target_is_excluded, priority, active, note, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                (
+                    user_id, match_type, match_value.strip(),
+                    target_category, target_flow_type,
+                    int(target_is_excluded) if target_is_excluded is not None else None,
+                    int(priority), note, now, now,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    @classmethod
+    def delete(cls, user_id: str, rule_id: int) -> Optional[dict]:
+        """Delete a rule row. Returns the row that was deleted, or None."""
+        TransactionStore.init_db()
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            existing = conn.execute(
+                "SELECT id, user_id, match_type, match_value, target_category, "
+                "target_flow_type, target_is_excluded, priority, active, note, "
+                "created_at, updated_at "
+                "FROM category_rules WHERE user_id = ? AND id = ?",
+                (user_id, rule_id),
+            ).fetchone()
+            if existing is None:
+                return None
+            conn.execute(
+                "DELETE FROM category_rules WHERE user_id = ? AND id = ?",
+                (user_id, rule_id),
+            )
+            conn.commit()
+            return _rule_row_to_dict(existing)
+
+    @classmethod
+    def set_active(cls, user_id: str, rule_id: int, active: bool) -> Optional[dict]:
+        TransactionStore.init_db()
+        with sqlite3.connect(TransactionStore.DB_PATH) as conn:
+            conn.execute(
+                "UPDATE category_rules SET active = ?, updated_at = ? "
+                "WHERE user_id = ? AND id = ?",
+                (1 if active else 0, _now_iso(), user_id, rule_id),
+            )
+            conn.commit()
+        return cls.get(user_id, rule_id)

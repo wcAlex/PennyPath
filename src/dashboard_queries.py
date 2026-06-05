@@ -1,14 +1,16 @@
-"""Dashboard aggregation reads for Phase 1B.
+"""Dashboard aggregation reads for Phase 1B / 1C.
 
 This module owns the read-time logic for the four standard charts:
-Spending, Income, Transactions, Cash Flow. It reads the **reconciled** view
-`v_transactions_recon` — transfer pairing, flow_type correction, dedup, and
-sign all live in `src/reconciler.py` now and are materialized once per user.
-This module just aggregates; it never re-derives those decisions.
+Spending, Income, Transactions, Cash Flow. It reads the **effective** view
+`v_transactions_effective` — system reconciliation (transfer pairing,
+flow_type correction, dedup, sign) and the user overlay (per-tx overrides,
+materialized rules) are stacked once per user. This module just aggregates;
+it never re-derives those decisions.
 
 All queries are read-only against `data/transactions.db`.
 
-See design/ui_dashboard.md §3 and design/storage.md → Reconciliation layer.
+See design/ui_dashboard.md §3, design/storage.md → Reconciliation layer,
+and design/overrides.md for the user overlay.
 """
 
 from __future__ import annotations
@@ -123,7 +125,8 @@ def _fetch_recon_rows(
     end: date,
     account_id: Optional[str] = None,
 ) -> list[dict]:
-    """Read v_transactions_recon for the window — recon overlay already applied.
+    """Read v_transactions_effective for the window — recon + user overlay
+    already applied.
 
     Ensures the user's recon is fresh first, so a brand-new ingest is reflected
     even if the rebuild trigger was missed.
@@ -133,9 +136,10 @@ def _fetch_recon_rows(
 
     sql = (
         "SELECT id, date, amount, description, category, account_type, "
-        "account_id, user_id, section_type, flow_type, flow_type_recon, "
-        "signed_amount, is_internal_transfer, is_duplicate "
-        "FROM v_transactions_recon "
+        "account_id, user_id, section_type, flow_type_recon, "
+        "signed_amount, is_internal_transfer, is_duplicate, "
+        "is_user_excluded, override_source, override_rule_id, override_note "
+        "FROM v_transactions_effective "
         "WHERE user_id = ? AND date BETWEEN ? AND ?"
     )
     params: list = [user_id, _iso(start), _iso(end)]
@@ -154,12 +158,14 @@ def list_transactions_signed(
     end: date,
     account_id: Optional[str] = None,
 ) -> list[dict]:
-    """Reconciled rows for the window.
+    """Effective rows for the window — recon overlay + user overlay applied.
 
-    Keeps the key names the rest of this module already uses, now sourced from
-    the recon overlay: `flow_type` is the *reconciled* type, `is_paired_transfer`
-    mirrors the recon transfer flag, `account_flow` is the signed amount. Adds
-    `is_duplicate`.
+    Keeps the key names the rest of this module already uses, sourced from the
+    overlays: `flow_type` is the effective type (override > recon > raw),
+    `category` is the effective category (override > raw), `is_paired_transfer`
+    mirrors the recon transfer flag, `account_flow` is the signed amount.
+    Adds `is_duplicate`, `is_user_excluded`, and the override provenance
+    columns so callers can show a "✎" badge.
     """
     rows = _fetch_recon_rows(user_id, start, end, account_id)
     out: list[dict] = []
@@ -178,18 +184,30 @@ def list_transactions_signed(
             "account_flow": r["signed_amount"],
             "is_paired_transfer": bool(r["is_internal_transfer"]),
             "is_duplicate": bool(r["is_duplicate"]),
+            "is_user_excluded": bool(r["is_user_excluded"]),
+            "override_source": r["override_source"],
+            "override_rule_id": r["override_rule_id"],
+            "override_note": r["override_note"],
         })
     return out
 
 
 def _excluded_from_spending(row: dict) -> bool:
-    """Excluded from spending if it's an internal transfer or a cross-source duplicate."""
-    return row["is_paired_transfer"] or row["flow_type"] == "transfer" or row["is_duplicate"]
+    """Excluded from spending if a recon transfer leg, cross-source duplicate,
+    or user-marked exclude."""
+    return (row["is_paired_transfer"]
+            or row["flow_type"] == "transfer"
+            or row["is_duplicate"]
+            or row["is_user_excluded"])
 
 
 def _excluded_from_income(row: dict) -> bool:
-    """Excluded from income if it's an internal transfer or a cross-source duplicate."""
-    return row["is_paired_transfer"] or row["flow_type"] == "transfer" or row["is_duplicate"]
+    """Excluded from income if a recon transfer leg, cross-source duplicate,
+    or user-marked exclude."""
+    return (row["is_paired_transfer"]
+            or row["flow_type"] == "transfer"
+            or row["is_duplicate"]
+            or row["is_user_excluded"])
 
 
 # --- Spending ----------------------------------------------------------------
@@ -718,7 +736,7 @@ def category_trend(
     for r in rows:
         if r["flow_type"] != flow:
             continue
-        if r["is_paired_transfer"] or r["is_duplicate"]:
+        if r["is_paired_transfer"] or r["is_duplicate"] or r["is_user_excluded"]:
             continue
         if (r["category"] or "").lower() != cat_lc:
             continue
@@ -798,7 +816,7 @@ def top_merchants(
     for r in rows:
         if r["flow_type"] != "spending":
             continue
-        if r["is_paired_transfer"] or r["is_duplicate"]:
+        if r["is_paired_transfer"] or r["is_duplicate"] or r["is_user_excluded"]:
             continue
         if cat_lc and (r["category"] or "").lower() != cat_lc:
             continue

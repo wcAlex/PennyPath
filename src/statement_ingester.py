@@ -872,6 +872,9 @@ def ingest_statements(directory: str = "data/statements") -> List[Transaction]:
     from src.storage import TransactionStore
     TransactionStore.init_db()
     user_id = _user_id()
+    # Cutoff for the rule-application hook at the bottom — only rows ingested
+    # during this run are scanned. ISO timestamps compare lexically.
+    _ingest_run_started = datetime.now().isoformat()
 
     try:
         entries = sorted(os.listdir(directory))
@@ -925,5 +928,11 @@ def ingest_statements(directory: str = "data/statements") -> List[Transaction]:
     # so the dashboard / chat / analysis all read corrected, paired data.
     from src.reconciler import rebuild_recon
     rebuild_recon(user_id)
+
+    # Apply the user's active category rules to the rows freshly ingested in
+    # this run, so a rule the user set previously keeps fixing future
+    # transactions automatically. See design/overrides.md → Ingest hook.
+    from src.overrides import apply_rules_to_new
+    apply_rules_to_new(user_id, since_ingested_at=_ingest_run_started)
 
     return TransactionStore.query_all()

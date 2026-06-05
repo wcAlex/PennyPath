@@ -108,7 +108,10 @@ class TestChatEndpoint:
         names = [t["name"] for t in resp.json()["tools"]]
         assert "query_spending_breakdown" in names
         assert "category_trend" in names
-        assert len(names) == 9
+        # 9 read tools + 9 override / rule tools (Phase 1C).
+        assert "create_category_rule" in names
+        assert "list_override_history" in names
+        assert len(names) == 18
 
 
 class TestDeleteMemory:

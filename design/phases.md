@@ -1,8 +1,8 @@
 # PennyPath — Development Phases
 
 Each phase delivers a complete product experience for one feature area, then hardens it before
-moving on. Within each phase (or sub-phase), work progresses through the steps below so each
-loop stays short and testable.
+moving on. Within each phase, work progresses through the steps below so each loop stays short
+and testable.
 
 ## Steps within every phase
 
@@ -16,325 +16,234 @@ loop stays short and testable.
 
 ---
 
-## Phase 1 — Personal Finance Visibility
+## Product shape
 
-**Goal:** Deliver the complete base-plan experience — a storage-and-search foundation, an
-annotated personal dashboard, and Q&A chat — end to end. A user can link accounts (Plaid or
-manual upload), see where their money goes on an annotated dashboard, and ask the companion
-questions in plain language.
+PennyPath is **one product, not a tiered program**. The core experience is: ingest a user's
+financial data, surface insight on an annotated dashboard, let the user customize that dashboard
+through chat (pinning generated charts), and use the chat to discuss what to do next. There is no
+separate coaching subscription — the companion *is* the product.
 
-This is the whole product's foundation. Phase 1 is built in three sequential workstreams —
-**1A Data Foundation → 1B Dashboard → 1C Companion Chat** — because the dashboard needs the
-data layer, and chat needs both. Each workstream runs through the early maturity steps
-(Local → Code analysis → Self-experiment); once all three cohere, a shared Tryout (1D) deploys
-them. Don't move on until the base-plan experience genuinely feels useful to real users.
+The feature surface grows over time: **spending analysis → payment / bill reminders → purchase
+warnings → cost-reduction recommendations**. Earlier phases earn the trust and data access that
+later phases depend on.
 
-### Delivery surfaces
+### Why statement upload first, Plaid later
 
-PennyPath ships on a **web app** and an **MCP connector** (the companion reachable inside
-Claude / ChatGPT) first. **Native mobile is deferred** to a later phase — the product's value
-is the agent (storage, search, memory, companion logic), and the web + MCP surfaces prove that
-without the cost and lead time of an app. The storage and agent layers stay surface-agnostic,
-so native mobile can be added later without reworking them.
+Plaid production access carries a heavy compliance, review, and cost burden, and — more
+importantly — asking a brand-new user to connect their bank on day one is the wrong trust ask.
+We start with **manual statement upload (PDF / CSV)** so we can prove the core product without
+that gate. Plaid arrives in Phase D, once we have customer traction and trust, and unlocks the
+real-time features (reminders, warnings) that justify a paid tier.
 
 ---
 
-### Phase 1A — Data Foundation
+## Phase A — Local Statement Companion
 
-**Goal:** A storage, search, and context layer the rest of the product builds on.
-
-**In scope:**
-- **Financial Record Store** — relational schema for institutions, accounts, and transactions,
-  with a `flow_type` field (spending / income / transfer / fee / refund). Plaid and statement
-  ingestion both write normalized records into the store.
-- **Internal vs. external money movement** — detect and pair the two legs of an internal
-  transfer (e.g. a credit-card payment) so they are excluded from spending/income aggregates.
-- **Semantic search** — embed transaction text; hybrid search combining vector similarity with
-  structured filters (date / category / amount / account).
-- **User Context / Memory Store** — tiered memory: a structured profile (working memory) plus
-  episodic memory, with an LLM-driven consolidation job that compacts, synthesizes, and forgets
-  so the agent always has the latest ~3–6 months plus a compact longer-history background.
-- **MCP Data-Access Layer** — typed query tools, hybrid semantic search, a guarded `run_sql`
-  escape hatch, `get_user_context`, `search_memory`. Agent logic talks only to the MCP.
-- CLI commands to ingest data and exercise every MCP tool.
-
-**Local stage:** extend the existing SQLite store (`src/storage.py`); use `sqlite-vec` or an
-embedding table for vectors. Formalize the existing `src/wiki_updater.py` into the consolidation
-job. Cloud Postgres + `pgvector` comes at Tryout (1D).
-
-**Out of scope:** dashboard charts, chat polish, auth, web UI, cloud.
-
-**Success bar:** From the CLI you can ingest Plaid + statement data, run a semantic search
-("coffee-related spending") and a typed query, and confirm the memory store compacts old
-context while keeping recent detail.
-
----
-
-### Phase 1B — Dashboard
-
-**Goal:** The annotated personal dashboard — standard charts plus LLM insight.
+**Goal:** A user can upload a bank or credit-card statement and get the full companion
+experience — annotated dashboard plus Q&A chat with custom chart generation — end to end on
+their own machine.
 
 **In scope:**
-- **Standard charts** — Spending (category donut + breakdown), Income (donut + 12-month
-  history), Transactions (filterable list), Cash Flow (12-month income vs. spending). Internal
-  transfers excluded from spending and income totals.
+- **User profile + goal shaping** — the user picks a life-stage profile (early career,
+  growing family, paying down debt, building wealth, or custom) and a starting intention. The
+  companion then helps shape that into one or more **workable, multi-timeframe, category-scoped
+  goals** grounded in the user's actual spending history — e.g. "~$40k/year on ski and travel"
+  or "~$20k/year on clothes and gear" alongside monthly intentions for steadier categories. The
+  companion proposes numbers from the user's own data; the user accepts, edits, or rejects.
+  Goals are loose intentions (no hard targets) and are editable anytime. Progress against each
+  intention is visible on the dashboard, and the companion can surface gentle observations
+  ("you're at 80% of your ski intention with two months left"). Profile + goals shape the
+  companion's tone, the dashboard's emphasis, and the chat. This is the user's initiative —
+  everything else reacts to it.
+- **Statement ingestion** (PDF / CSV) into a unified `transactions` store with magnitude-only
+  amounts and a closed-enum `section_type`. See `design/storage.md` for the contract.
+- **Internal-transfer pairing** so spending/income totals reflect real money in and out.
+- **Four standard charts** — Spending (category donut + breakdown), Income (donut + 12-month
+  history), Transactions (filterable list), Cash Flow (12-month income vs. spending).
 - **LLM annotation layer** — each chart carries a short, warm annotation and, where useful, a
-  gentle suggested action. Annotations are generated when new data syncs and cached; a manual
-  "refresh insights" action is available.
-- **Pinned-chart rendering** — the dashboard renders and persists custom charts pinned from
-  chat (chart generation itself is 1C).
-- A web surface to render the dashboard.
+  gentle suggested action; cached and refreshable.
+- **Q&A chat** over the user's real data, answered through typed query tools and hybrid
+  semantic search.
+- **Custom chart generation from chat** + **pin-to-dashboard** so the dashboard becomes
+  personalized to what each user actually cares about.
+- **User context / memory store** — working memory + episodic memory with an LLM-driven
+  consolidation job that compacts old history while keeping recent detail.
+- **Web UI** (local) for the dashboard and chat. The agent stays surface-agnostic.
+- CLI commands to exercise ingest and every agent tool.
 
-**Out of scope:** native mobile, coaching, drill-down chat (1C).
+**Local stage:** SQLite (`src/storage.py`) with `sqlite-vec` or an embedding table for vectors.
+Cloud Postgres + `pgvector` is Phase B.
 
-**Success bar:** The dashboard renders the four standard charts from real data, each carries a
-warm and accurate annotation, and totals correctly exclude internal transfers.
+**Out of scope:** Plaid, payment reminders, purchase warnings, recommendations, native mobile,
+auth, multi-user, cloud.
+
+**Success bar:** You upload a statement, see four annotated charts that correctly exclude
+internal transfers, ask a follow-up in chat, pin a generated chart, and the dashboard remembers
+it on the next run.
 
 ---
 
-### Phase 1C — Companion Chat
+## Phase B — Cloud Deploy
 
-**Goal:** Q&A chat with drill-down and custom chart generation.
+**Goal:** Make the Phase A experience available to real users on the open web. This is the
+first public launch, scoped to statement upload only.
 
 **In scope:**
-- Q&A over the user's real data, answered through the MCP tools.
-- **Drill-down** from any dashboard chart ("why was March higher?", "show me just weekends").
-- **Custom chart generation** — the companion produces a new chart in response to a question.
-- **Pin from chat** — a generated chart can be pinned to the dashboard (1B renders it).
-- Conversation memory wired into the User Context / Memory Store.
-
-**Out of scope:** native mobile, coaching, push notifications.
-
-**Success bar:** `chat` answers finance questions accurately and warmly, can generate a
-relevant custom chart, and a pinned chart appears on the dashboard on the next visit.
-
----
-
-### Step 1D — Tryout
-
-**Goal:** Let 3–5 real people try the base-plan experience on the web + MCP surfaces.
-
-**Adds:**
-- PostgreSQL + `pgvector` (local Docker for dev; RDS for the tryout deploy), replacing local SQLite.
-- FastAPI backend (`api/` alongside `src/`) serving the dashboard and chat.
+- PostgreSQL + `pgvector` (RDS) replacing local SQLite; Alembic migrations.
+- FastAPI backend (`api/` alongside `src/`) + Mangum on Lambda + API Gateway.
 - JWT auth (email + password registration).
-- Plaid Link web flow (a simple HTML page is fine); PDF/CSV upload via a basic web form.
-- The MCP server published so testers can also reach the companion inside Claude.
-- Minimal deployment: Lambda + API Gateway + RDS.
-- Invite link to share with testers.
+- Web upload form for PDF / CSV statements; files in a private S3 bucket with presigned URLs.
+- Real (but minimal) production posture: HTTPS, basic CloudWatch monitoring, error alerting,
+  account deletion flow.
+- Public invite/signup flow.
 
 **Folder structure adds:**
 ```
 api/
   main.py          # FastAPI app + Mangum adapter
   auth.py          # JWT registration + login
-  plaid.py         # token exchange + webhook ingestion
+  upload.py        # statement upload + ingestion trigger
   chat.py          # conversation endpoints
   dashboard.py     # chart data + annotations
-mcp/
-  server.py        # MCP data-access server (typed tools, semantic search, run_sql)
 db/
   models.py        # SQLAlchemy models
   migrations/      # Alembic migrations
 web/
-  onboarding.html  # minimal Plaid Link + upload form
-src/               # unchanged — reused by the API and the MCP server
+  app/             # dashboard + chat web UI
+src/               # unchanged — reused by the API
 ```
 
-**Out of scope:** native mobile, coaching, payments, full security hardening.
+**Out of scope:** Plaid, mobile, advanced onboarding, payment reminders, recommendations.
 
-**Success bar:** A friend links their account, sees an annotated dashboard, has a real
-conversation with the companion, and says "I'd actually use this."
+**Success bar:** A user can register on the open web, upload a statement, see their annotated
+dashboard, chat with the companion, and says "I'd actually use this."
 
 ---
 
-## Phase 2 — Privacy & Trust
+## Phase C — Easy Onboarding (+ Mobile if traction)
 
-**Goal:** Make the product safe and trustworthy at scale. This phase runs in parallel with
-Phase 1 Step 1D (Tryout) — start it once the feature is working and you're preparing for
-real user traffic.
+**Goal:** Make the path from "I have a statement somewhere" to "I see my annotated dashboard"
+frictionless. Statement upload is the friction point — solve it. Build a native mobile surface
+only if usage and demand justify it.
 
 **In scope:**
+- **Per-bank statement helpers** — deep links and short instructions for the major U.S. banks
+  on where to download a PDF/CSV statement.
+- **Email-forwarding ingest** — a user-scoped address; forward your statement email, we parse
+  and load.
+- **Drag-and-drop multi-file upload** with a preview of detected accounts and transactions
+  before commit, so the user can sanity-check before anything lands in their dashboard.
+- **Friendlier first run** — profile and goal selection inline with the first upload, not as
+  a separate wizard stage.
+- **Mobile app (demand-gated)** — React Native; primary value is on-the-go photo capture of a
+  statement (camera → OCR → ingest) and viewing the dashboard. Push notifications are deferred
+  to Phase D, when there is real-time data worth pushing about.
 
-*Data security:*
-- KMS encryption for Plaid access tokens (encrypt before DB write; decrypt only in Lambda memory)
-- Secrets Manager for all API keys (Plaid, LLM, Stripe) — remove from `.env` in production
-- Lambda inside VPC; RDS with no public endpoint
-- Statement files in private S3 bucket; presigned URLs with 15-minute expiry
-- MCP data access through a read-only, user-scoped DB role; `run_sql` is SELECT-only and timed out
-
-*Auth hardening:*
-- JWT rotation and revocation on logout
-- Refresh token invalidation on suspicious activity
-- Rate limiting on auth endpoints
-
-*Webhooks:*
-- Plaid webhook `Plaid-Verification` JWT header verified on every request
-- Stripe webhook `Stripe-Signature` HMAC verified before processing
-
-*User rights:*
-- Account deletion flow: wipe all user data across all tables within 30 seconds of request
-- Episodic memory consolidated and purged past the retention window
-- Data export (user can download their finance records and history)
-
-*Compliance:*
-- Privacy policy and terms of service (before public launch)
-- GDPR / CCPA: data minimization audit, right to deletion, no cross-user data leakage
-
-*Observability:*
-- Audit log: account linking, data access, message dispatch → CloudWatch (90-day retention)
-- Error alerting for Lambda failures, DB connection issues, LLM errors
-- Uptime monitoring
-
-**Success bar:** An independent security review finds no critical or high issues.
-Users can delete their account and all data in a few clicks.
-
----
-
-## Phase 3 — Coaching Plan
-
-**Goal:** Add the optional paid coaching feature. Users who subscribe get a structured 6-month
-plan with bi-weekly check-ins, weekly progress summaries, and progressive phase targets.
-
-### Step 3.1 — Local
-
-**In scope:**
-- Coaching plan state machine: Foundation (7 days) → Building (21 days) → Momentum (3 months)
-- Coaching-aware SpendingContext: adds `coaching_phase` and `phase_target` fields
-- Updated companion prompt for coaching context (phase-specific tone and framing)
-- Phase transition detection + milestone message generation
-- CLI commands:
-  - `python -m src.cli coaching-checkin` — generate a bi-weekly check-in
-  - `python -m src.cli weekly-summary` — generate a weekly progress summary
-  - `python -m src.cli advance-phase` — manually advance to the next phase (for testing)
-- Local coaching state file (`data/coaching.json`)
-
-**Out of scope:** payments, mobile UI, scheduling, DB
-
-**Success bar:** `python -m src.cli coaching-checkin` produces a check-in that meaningfully
-references the current phase target and feels distinctly different from a base-plan check-in.
-The Foundation → Building transition message acknowledges the milestone without sounding hollow.
-
----
-
-### Step 3.2 — Code Analysis
-
-- Phase transition boundary conditions (what if check-in happens exactly on day 7? Day 8?)
-- Does `phase_target` in SpendingContext actually influence LLM output, or is it ignored?
-- Coaching vs. base-plan tone: are they distinguishable? Is coaching more directive than it should be?
-- Weekly summary: does it feel useful or like a report card?
-
----
-
-### Step 3.3 — Self-Experiment
-
-Run the full Foundation phase (7 days) manually via CLI:
-- Trigger check-ins daily
-- Advance phase at day 7; observe the transition message
-- Note where coaching messages feel preachy, repetitive, or generic
-- Iterate on prompt and SpendingContext until coaching feels meaningfully different from the base plan
-
----
-
-### Step 3.4 — Tryout
-
-**Adds:**
-- `coaching_plans` and `subscriptions` DB tables
-- Stripe integration (test mode — real card flow, no live charge)
-- API endpoints: `/coaching/subscribe`, `/coaching/status`, `/coaching/advance-phase`
-- Coaching UI: coaching plan view (current phase, target, progress, next check-in date)
-- EventBridge rules per coaching user (bi-weekly + weekly triggers)
-- Phase transition notifications
-- 3–5 beta users who agree to try the paid flow
-
-**Out of scope:** live Stripe billing, App Store in-app purchase
-
-**Success bar:** A beta user goes through the full Foundation phase (7 days), advances to Building,
-and says the check-ins felt meaningfully different and useful.
-
----
-
-### Step 3.5 — Production Ready
-
-**Adds:**
-- Stripe production keys + live billing ($9.99/month)
-- Cancellation and downgrade flow (cancel → lose coaching features, keep base plan)
-- Graduation tracking: record when users complete all 3 phases
-- Coaching analytics (internal): graduation rate, engagement per phase, churn by phase
-- App Store in-app purchase (optional — can also keep direct Stripe)
-
----
-
-## Phase 4 — Native Mobile
-
-**Goal:** Add a native iOS / Android app once the web + MCP experience is proven. The web app
-remains; mobile is an additional surface, valuable mainly for proactive push notifications and
-a polished on-the-go experience. This phase is **demand-gated** — build it when traction and
-user demand justify it, which may be before or after Phase 3.
-
-**Adds:**
-- React Native project (Expo or bare workflow) in `mobile/`
-- All screens from `design/product.md`: onboarding wizard, annotated home dashboard, companion
-  chat, monthly analysis, settings
-- Plaid Link React Native SDK; JWT stored in the device secure keychain
-- API integration against the existing backend — the surface-agnostic design means no API rework
-- Push notifications for check-ins and monthly analysis (SNS → APNs / FCM)
-- App Store (iOS) + Google Play (Android) submission
-
-**Folder structure adds:**
+**Folder structure adds (if mobile is built):**
 ```
 mobile/
-  app/
-    (tabs)/
-      index.tsx       # home dashboard
-      chat.tsx        # companion chat
-      analysis.tsx    # monthly analysis
-      settings.tsx    # account + preferences
-    onboarding/
-      register.tsx
-      profile.tsx
-      goal.tsx
-      link-accounts.tsx
+  app/             # screens (home, chat, settings, onboarding)
   components/
   lib/
-    api.ts            # typed API client wrapping fetch
-    auth.ts           # JWT keychain helpers
-  app.json
-  package.json
+    api.ts         # typed API client
+    auth.ts       # JWT keychain helpers
 ```
 
-**Success bar:** A new user can complete onboarding on a real device, see their dashboard, and
-have a conversation with the companion — all without touching a terminal. The app is live in
-both stores.
+**Out of scope:** Plaid, payment reminders, purchase warnings, recommendations.
+
+**Success bar:** A new user gets from zero to an annotated dashboard in under five minutes
+without instructions; if mobile shipped, they can do it from their phone.
+
+---
+
+## Phase D — Plaid + Proactive Account Features (paid tier)
+
+**Goal:** Once we have traction and trust, integrate Plaid for real-time data and use that
+signal to ship proactive features users will pay for.
+
+**In scope:**
+
+*Plaid + account analysis:*
+- Plaid Link (read-only) — live balances and automatic transaction sync.
+- Account analysis — balances across linked accounts, low-balance projections, recurring-charge
+  inventory.
+
+*Proactive features:*
+- **Payment / bill reminders** — detect recurring bills and alert before due date (push on
+  mobile, email/web otherwise).
+- **Purchase warnings** — flag charges that are unusually large for a category, or that would
+  push an account below a user-set threshold. Framed as gentle observations, not alarms.
+
+*Paid tier:*
+- Plaid-powered proactive features sit behind a subscription. The Phase A/B/C base experience
+  (statement upload + dashboard + chat) remains free.
+- Stripe integration; cancellation flow that downgrades cleanly back to the free base.
+
+*Trust hardening required for Plaid prod access:*
+- KMS encryption for Plaid access tokens.
+- Secrets Manager for all third-party API keys.
+- Lambda in VPC; RDS no public endpoint.
+- Webhook signature verification (Plaid `Plaid-Verification`, Stripe `Stripe-Signature`).
+- Audit log of account-linking and data-access events.
+- Account deletion: wipes all user data, memory, and Plaid item links within 30 seconds.
+- Privacy policy, terms of service, GDPR / CCPA data-rights flow.
+- Independent security review pass before public Plaid launch.
+
+**Out of scope:** Recommendation engine (Phase E).
+
+**Success bar:** A subscribed user links a real account via Plaid, receives at least one
+accurate bill reminder and one helpful purchase warning per month, and finds them useful
+enough not to mute. An independent security review finds no critical or high issues.
+
+---
+
+## Phase E — Recommendation Engine
+
+**Goal:** Move from "tell me what happened" to "here's what you could change." The companion
+suggests concrete spending changes that reduce cost without hurting quality of life.
+
+**In scope:**
+- **Subscription audit** — duplicates, dormant subscriptions, plausible downgrades.
+- **Category-level recommendations** grounded in the user's actual data ("you spent $X on
+  ride-share this month; here's what a mixed transit/rideshare pattern would look like").
+- **Quality-of-life modeling** — every recommendation explicitly preserves a user-declared set
+  of things they value, so we never suggest cutting something they care about.
+- **Optional "try this for two weeks" experiments** — companion-driven, with before/after
+  observation, framed as gentle nudges, not prescriptions.
+
+**Out of scope:** Hard budgets, score-based feedback, anything that violates the no-shame
+product tone.
+
+**Success bar:** Users accept and act on at least one recommendation per month on average,
+and report that the recommendations feel respectful of their preferences and lifestyle.
 
 ---
 
 ## Working with Claude across phases
 
-### How Claude knows which phase and step you're in
+### How Claude knows which phase you're in
 
-Update `CLAUDE.md` at the start of each phase or sub-phase:
+Update `CLAUDE.md` at the start of each phase:
 
 ```
-## Current Phase: 1A — Data Foundation
-In scope: local CLI, real Plaid + statement data, building the storage / search / memory layer
-and the MCP data-access server.
-Out of scope: dashboard, chat polish, auth, web UI, cloud, coaching.
+## Current Phase: A — Local Statement Companion
+In scope: local CLI + local web, real PDF/CSV statement data, dashboard + chat + custom
+chart pinning. No Plaid, no cloud, no payment reminders.
 ```
 
 Open each session with a one-line scope reminder:
-> "Phase 1A. I want to improve the consolidation job — old context isn't compacting well."
+> "Phase A. I want to improve the dashboard annotations — they feel generic right now."
 
-### Advancing a step
+### Advancing a phase
 
-1. Update `## Current Phase` in `CLAUDE.md`
-2. Open the next session: *"Moving to Phase 1B (Dashboard). Here's what that adds..."*
+1. Update `## Current Phase` in `CLAUDE.md`.
+2. Open the next session with: *"Moving to Phase B (Cloud Deploy). Here's what that adds…"*
 
 ### Preventing scope creep
 
-> "Keep it Phase 1A — storage and MCP only, no dashboard or chat work yet."
+> "Keep it Phase A — statement upload and local dashboard only, no Plaid or reminders yet."
 
 ### Readiness check before advancing
 
-> "Before we move from 1A to 1B, review src/ and tell me what's solid in the data layer
->  and what still needs work."
+> "Before we move from A to B, review src/ and tell me what's solid and what still needs work
+>  in the local companion."

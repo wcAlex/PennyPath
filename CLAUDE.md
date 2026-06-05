@@ -2,65 +2,60 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current Phase: 1B — Dashboard
+## Current Phase: A — Local Statement Companion
 
-We are in Phase 1, sub-phase 1B. See `design/phases.md` for the full phase breakdown.
+We are mid-Phase A. See `design/phases.md` for the full phase breakdown.
 
-**Phase 1A is complete.** The data foundation (`src/storage.py`, `src/statement_ingester.py`, `src/plaid_client.py`) ingests Plaid + PDF/CSV statements into a unified `transactions` table with magnitude-only amounts and a closed-enum `section_type`. The `v_transactions_signed` view derives per-account balance flow. See `design/storage.md` for the contract. Build on top of this; do not re-litigate the storage schema unless a 1B requirement makes it necessary.
+**Built so far:** Statement ingestion (PDF / CSV) (`src/statement_ingester.py`), unified `transactions` storage (`src/storage.py`) with the `section_type` enum and `v_transactions_signed` view, the four standard dashboard charts, Q&A chat backed by typed query tools (`src/chat_agent.py`, `src/chat_tools.py`), and a local web surface (`src/web_chat.py`, `src/templates/dashboard.html`). See `design/storage.md` for the storage contract — build on it; do not re-litigate the schema unless a Phase A requirement forces it.
 
-**In scope (Phase 1B):**
-- **Four standard charts** rendered from the existing `transactions` data:
-  - Spending — category donut + breakdown
-  - Income — donut + 12-month history
-  - Transactions — filterable list (date / category / amount / account)
-  - Cash Flow — 12-month income vs. spending
-- **Internal transfers excluded** from spending and income totals. The pairing logic is the query-layer concern deferred from 1A — implement it here.
-- **LLM annotation layer** — each chart carries a short, warm annotation and, where useful, a gentle suggested action. Annotations are generated when new data syncs and cached; a manual "refresh insights" action is available.
-- **Pinned-chart rendering** — the dashboard renders and persists custom charts pinned from chat. (Chart *generation* from chat is 1C; 1B just needs the rendering / persistence slot.)
-- **A web surface** to host the dashboard.
+**Rough edges to smooth before Phase B (Cloud Deploy):**
+- **Chat iteration** — answer quality, tool selection, and conversational flow are not yet at the level we'd want a stranger to see.
+- **Goal management** — profile and goals are first-class product concepts (they shape companion tone and dashboard emphasis), but UI and persistence for setting / editing them are incomplete. Goals are **multi-timeframe and category-scoped** (e.g. "~$40k/year on ski and travel" alongside monthly intentions); the companion co-creates them by proposing numbers grounded in the user's actual history. Progress tiles per intention live on the dashboard.
+- **Pin-to-dashboard** — chart generation in chat works; persisting pinned custom charts back onto the dashboard is incomplete.
+- LLM annotation polish, internal-transfer pairing edge cases, and refresh-insights UX are also Phase A finish work.
 
-**Out of scope:** drill-down chat and custom chart generation (Phase 1C); native mobile (deferred); auth, multi-user, cloud Postgres, AWS (Phase 1D Tryout); coaching (Phase 3).
+**Out of scope right now:** Plaid, payment/bill reminders, purchase warnings, recommendation engine, native mobile, auth, multi-user, cloud. These belong to later phases (D, D, D, E, C, B, B, B respectively).
 
-When helping with code, stay within Phase 1B constraints. Do not build chat drill-down, custom chart generation from chat, native mobile, or coaching unless explicitly asked. The web surface is the delivery target — `src/web_chat.py` is the existing seed to extend or replace.
+When helping with code, stay within Phase A constraints. The local web surface is the delivery target for now — `src/web_chat.py` is the existing seed to extend or replace.
 
 ---
 
 ## Project
 
-**PennyPath** is a personal finance companion mobile app — not a budgeting tool. The product philosophy is non-judgmental, low-pressure habit coaching. It helps users build healthy financial discipline progressively and adaptively, like a caring buddy rather than an enforcer.
+**PennyPath** is a personal finance companion — not a budgeting tool. The product philosophy is non-judgmental, low-pressure habit formation. It helps users build healthy financial discipline progressively and adaptively, like a caring buddy rather than an enforcer.
 
-Two-tier product: a **base plan** (personal finance visibility — dashboard, Q&A chat, monthly analysis) and an optional **paid coaching plan** ($9.99/month, 6-month structured program with progressive habit phases).
+One product, not a tiered program: ingest the user's data, surface insight on an annotated dashboard, let the user shape that dashboard through chat (pinning generated charts), and use chat to discuss what to do next. Later paid extensions (bill reminders, purchase warnings, spending-reduction recommendations) extend the same companion once we have real-time bank-linking access — see `design/phases.md` Phases D and E.
 
 ## Architecture
 
 The system has three main layers:
 
-### 1. Mobile App (Frontend)
-User-facing mobile app for:
-- Account registration and onboarding (profile, goal, account linking)
-- Viewing the personal finance dashboard (spending overview, category trends, goal progress)
+### 1. Web Frontend
+User-facing web UI for:
+- Onboarding (profile, goal, first statement upload)
+- Viewing the personal finance dashboard (spending overview, category trends, goal context)
 - Interactive Q&A chat with the companion
 - Monthly analysis report
-- Coaching plan enrollment and progress tracking
+- Native mobile is deferred to Phase C and is demand-gated.
 
 ### 2. Backend API
 Handles all business logic:
-- User and account management
-- Plaid integration (bank/card linking, transaction sync) and PDF/CSV statement ingestion
-- AI/LLM orchestration — generating check-in messages, monthly analyses, and coaching plans
-- Finance analysis and progress tracking
+- User and account management (profile + goal)
+- PDF / CSV statement ingestion (Plaid arrives in Phase D)
+- AI/LLM orchestration — annotations, chat answers, monthly analyses
+- Finance analysis and progress tracking against the user's stated goal
 
 ### 3. Companion Agent
-The AI companion runs on a schedule and reacts to user messages:
+The AI companion reacts to user messages and (later) runs on a schedule:
 - Pulls user transaction data and financial state
-- Generates contextual, personalized messages using an LLM
-- Delivers bi-weekly coaching check-ins and weekly progress summaries
+- Generates contextual, personalized responses using an LLM
 - Handles user replies in the in-app chat interface
+- Phase D adds proactive check-ins (bill reminders, purchase warnings) once real-time bank data is available
 
 ## Key Integrations
 
-- **Plaid** — bank account and credit card linking, read-only transaction retrieval
-- **LLM (DeepSeek / Claude)** — powers the companion's tone, spending analysis, and coaching plans
+- **LLM (DeepSeek / Claude)** — powers the companion's tone, spending analysis, and annotations
+- **Plaid** — bank account and credit card linking, read-only transaction retrieval (Phase D, not yet integrated)
 
 ## Data Model (planned)
 

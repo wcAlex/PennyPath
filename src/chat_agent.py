@@ -412,6 +412,11 @@ class ChatAgent:
         history = history or []
         messages = _build_messages(history, chart_context, wiki_text, user_message)
         tools = chat_tools.to_openai_tools()
+        # Provenance for any override / rule mutations made by this turn —
+        # stamped into override_audit so the user can ask "what changed?"
+        # and "why is this row tagged X?" later.
+        from src.storage import ConversationStore
+        session_id = ConversationStore.get_current_session_id() or None
 
         # If the caller didn't pass a trace dict but env tracing is on, use a
         # local one so the stderr printer has something to render at the end.
@@ -493,6 +498,11 @@ class ChatAgent:
                         args = json.loads(tc["function"]["arguments"] or "{}")
                     except json.JSONDecodeError:
                         args = {}
+                    # Inject chat-session provenance so any mutation tool
+                    # (set_override / create_category_rule / etc.) writes the
+                    # session id into override_audit. Read-only tools ignore.
+                    if session_id and "_chat_session_id" not in args:
+                        args["_chat_session_id"] = session_id
                     tool_start = time.monotonic()
                     result = chat_tools.dispatch(user_id, name, args)
                     elapsed = time.monotonic() - tool_start
